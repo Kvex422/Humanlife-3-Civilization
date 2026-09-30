@@ -286,6 +286,11 @@ local State = {
     TravelHops         = false,
     HopDistance        = 180,
     HitGap             = 0.12,
+    FireFloor          = 0.03,
+    LandSpread         = 1.4,
+    SkipSeconds        = 8,
+    ClusterRadius      = 90,
+    ClusterSeconds     = 60,
 
     AutoRejoin         = false,
 
@@ -570,7 +575,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(320, 16), Position = UDim2.fromOffset(60, 26),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization  ·  v1.9.4",
+    Text = "Humanlife 3: Civilization  ·  v1.9.5",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -580,6 +585,9 @@ new("TextLabel", {
 -- ============================================================
 local cancelMoveTween
 local unlockMovement
+-- Assigned in the gather section; the respawn handler needs it, and that runs
+-- long before the gather code is reached on the way down the file.
+local clearNodeOffsets
 local flightCleanup
 local noclipCleanup
 local infJumpCleanup
@@ -1011,17 +1019,16 @@ function Features.setXRay(on: boolean)
     if not on then return end
     local touched = {}
     local inRange = {}
+    local params = OverlapParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.MaxParts = 500
     Scheduler.add("xray", "logic", 0.3, function()
         if Unloading or not State.XRay then return end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local char = player.Character
         local camPos = cam.CFrame.Position
-
-        local params = OverlapParams.new()
-        params.FilterType = Enum.RaycastFilterType.Exclude
         params.FilterDescendantsInstances = char and { char } or {}
-        params.MaxParts = 500
         local ok, parts = pcall(function()
             return workspace:GetPartBoundsInRadius(camPos, XRAY_RANGE, params)
         end)
@@ -1138,29 +1145,45 @@ end
 
 local lastFxTame = 0
 local FB_WHITE = Color3.new(1, 1, 1)
+-- Exact float inequality made this rewrite every frame forever: the engine
+-- stores a rounded value back, so `~= 3` stayed true and the write fought the
+-- game's own writer. ClockTime is looser because the day cycle ticks it by
+-- more than 0.01 every frame, and rewriting that is what flickered.
+local FB_EPS = 0.04
+local FB_CLOCK_EPS = 0.2
+
+local function farOff(current: number, want: number): boolean
+    return math.abs(current - want) > FB_EPS
+end
+
+local function colorOff(current: Color3, want: Color3): boolean
+    return math.abs(current.R - want.R) > FB_EPS
+        or math.abs(current.G - want.G) > FB_EPS
+        or math.abs(current.B - want.B) > FB_EPS
+end
 
 local function applyFullbrightFrame()
     if lightingApplying then return end
     lightingApplying = true
     local L = Lighting
-    if L.ClockTime ~= 14 then L.ClockTime = 14 end
-    if L.Brightness ~= 3 then L.Brightness = 3 end
-    if L.Ambient ~= FB_WHITE then L.Ambient = FB_WHITE end
-    if L.OutdoorAmbient ~= FB_WHITE then L.OutdoorAmbient = FB_WHITE end
-    if L.FogStart ~= 0 then L.FogStart = 0 end
+    if math.abs(L.ClockTime - 14) > FB_CLOCK_EPS then L.ClockTime = 14 end
+    if farOff(L.Brightness, 3) then L.Brightness = 3 end
+    if colorOff(L.Ambient, FB_WHITE) then L.Ambient = FB_WHITE end
+    if colorOff(L.OutdoorAmbient, FB_WHITE) then L.OutdoorAmbient = FB_WHITE end
+    if farOff(L.FogStart, 0) then L.FogStart = 0 end
     if L.FogEnd < 1e5 then L.FogEnd = 1e6 end
     if L.GlobalShadows then L.GlobalShadows = false end
     pcall(function()
-        if L.ExposureCompensation ~= 0.25 then L.ExposureCompensation = 0.25 end
+        if farOff(L.ExposureCompensation, 0.25) then L.ExposureCompensation = 0.25 end
     end)
     local now = os.clock()
     if now - lastFxTame > 0.8 then
         lastFxTame = now
         local atmo = L:FindFirstChildOfClass("Atmosphere")
         if atmo then
-            if atmo.Density ~= 0 then atmo.Density = 0 end
-            if atmo.Haze ~= 0 then atmo.Haze = 0 end
-            if atmo.Glare ~= 0 then atmo.Glare = 0 end
+            if farOff(atmo.Density, 0) then atmo.Density = 0 end
+            if farOff(atmo.Haze, 0) then atmo.Haze = 0 end
+            if farOff(atmo.Glare, 0) then atmo.Glare = 0 end
         end
         for _, inst in L:GetChildren() do
             if inst:IsA("PostEffect") and inst.Enabled then
@@ -1169,8 +1192,8 @@ local function applyFullbrightFrame()
         end
         local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds")
         if clouds then
-            if clouds.Cover ~= 0 then clouds.Cover = 0 end
-            if clouds.Density ~= 0 then clouds.Density = 0 end
+            if farOff(clouds.Cover, 0) then clouds.Cover = 0 end
+            if farOff(clouds.Density, 0) then clouds.Density = 0 end
         end
     end
     lightingApplying = false
@@ -1189,13 +1212,11 @@ local function bindLightingStep()
     if lightingBound or Unloading then return end
     lightingBound = true
     pcall(function() RunService:UnbindFromRenderStep(LIGHT_BIND) end)
-    -- Scheduler pass plus a deferred pass beat the game's day/night writer. Do
-    -- not hook PropertyChanged: writing ClockTime there fights the game and
-    -- flickers fullbright on/off every frame.
-    Scheduler.add("lighting", "logic", 0, function()
-        lightingStep()
-        task.defer(lightingStep)
-    end)
+    -- BindToRenderStep(Last) is the pass that actually sits after the game's
+    -- lighting writer. A second Heartbeat + defer write was fighting that
+    -- writer twice more per frame and is what still flickered. The scheduler
+    -- job is only a slow backup if the bind is stripped.
+    Scheduler.add("lighting", "logic", 0.12, lightingStep)
     pcall(function()
         RunService:BindToRenderStep(LIGHT_BIND, Enum.RenderPriority.Last.Value + 50, lightingStep)
     end)
@@ -1576,17 +1597,23 @@ Stealth.presets = {
     Fast = {
         SoftTeleport = false, TravelHops = false, UsePin = true, PinMax = 600,
         LandingJitter = false, VelocityClamp = false, HitGap = 0.08,
-        GatherSpeed = 100,
+        GatherSpeed = 100, SoftTeleportSpeed = 600, HopDistance = 400,
+        MaxVelocity = 400, LandSpread = 0, FireFloor = 0.02,
+        SkipSeconds = 6, ClusterRadius = 70, ClusterSeconds = 45,
     },
     Balanced = {
         SoftTeleport = false, TravelHops = true, UsePin = true, PinMax = 8,
         LandingJitter = true, VelocityClamp = false, HitGap = 0.12,
-        GatherSpeed = 80,
+        GatherSpeed = 80, SoftTeleportSpeed = 300, HopDistance = 180,
+        MaxVelocity = 220, LandSpread = 1.4, FireFloor = 0.03,
+        SkipSeconds = 8, ClusterRadius = 90, ClusterSeconds = 60,
     },
     Safe = {
         SoftTeleport = true, TravelHops = true, UsePin = false, PinMax = 0,
         LandingJitter = true, VelocityClamp = true, HitGap = 0.22,
-        GatherSpeed = 45,
+        GatherSpeed = 45, SoftTeleportSpeed = 140, HopDistance = 90,
+        MaxVelocity = 120, LandSpread = 2.6, FireFloor = 0.06,
+        SkipSeconds = 12, ClusterRadius = 120, ClusterSeconds = 90,
     },
 }
 
@@ -4138,6 +4165,10 @@ local diedConn: RBXScriptConnection? = nil
 local function reapplyAfterSpawn(char: Model)
     if cancelMoveTween then pcall(cancelMoveTween) end
     if unlockMovement then pcall(unlockMovement) end
+    -- The old character's landing offsets are keyed by node instance, but the
+    -- reason to keep them (not re-jittering while standing on one) is gone the
+    -- moment the character is replaced.
+    if clearNodeOffsets then pcall(clearNodeOffsets) end
     pcall(function()
         player.CameraMaxZoomDistance = State.CamZoom
         local cam = workspace.CurrentCamera
@@ -4265,6 +4296,11 @@ do
     -- of your max distance.
     local pool = {}
     local POOL_CAP = 120
+    -- Hidden-but-kept window for a target that just left range or lost the
+    -- on-view sort. Long enough to absorb flicker, short enough that walking
+    -- away really does release the drawing.
+    local ESP_GRACE = 0.75
+    local graceUntil = {}
 
     local function makeDrawing(color)
         local d = table.remove(pool)
@@ -4374,6 +4410,7 @@ do
                     removeDrawing(d)
                     drawings[inst] = nil
                 end
+                table.clear(graceUntil)
             end
             return
         end
@@ -4462,10 +4499,24 @@ do
             end
         end
 
+        -- Grace period. A target hovering at the distance limit, or one that
+        -- lost the on-view sort by a place or two, used to churn a drawing per
+        -- frame. Hold it hidden for a moment instead, so a target that comes
+        -- straight back reuses the same drawing with no allocation at all.
+        local now = os.clock()
         for inst, d in drawings do
-            if not activeSet[inst] then
-                removeDrawing(d)
-                drawings[inst] = nil
+            if activeSet[inst] then
+                graceUntil[inst] = nil
+            else
+                local expiry = graceUntil[inst]
+                if not expiry then
+                    graceUntil[inst] = now + ESP_GRACE
+                    hideDrawing(d)
+                elseif now >= expiry then
+                    graceUntil[inst] = nil
+                    removeDrawing(d)
+                    drawings[inst] = nil
+                end
             end
         end
     end
@@ -4599,18 +4650,60 @@ do
         return true
     end
 
+    -- Velocity sampled from replicated position, not from the part's own
+    -- AssemblyLinearVelocity. For a remote character that property is often
+    -- zero or a frame stale, which is exactly why linear prediction looked
+    -- wrong on strafing targets. Smoothed so a single late packet does not
+    -- throw the lead sideways.
+    local velSample = {
+        part = nil :: BasePart?,
+        pos = Vector3.zero,
+        at = 0,
+        vel = Vector3.zero,
+        accel = Vector3.zero,
+    }
+
+    local function sampledVelocity(target: BasePart): (Vector3, Vector3)
+        local now = os.clock()
+        local pos = target.Position
+        if velSample.part ~= target or (now - velSample.at) > 0.5 then
+            velSample.part = target
+            velSample.pos = pos
+            velSample.at = now
+            velSample.vel = target.AssemblyLinearVelocity
+            velSample.accel = Vector3.zero
+            return velSample.vel, velSample.accel
+        end
+        local dt = now - velSample.at
+        if dt < 1 / 120 then return velSample.vel, velSample.accel end
+        local measured = (pos - velSample.pos) / dt
+        local prev = velSample.vel
+        velSample.pos = pos
+        velSample.at = now
+        velSample.vel = velSample.vel:Lerp(measured, 0.35)
+        -- Acceleration from the smoothed velocity, not the raw packet delta,
+        -- so a single stutter does not invent a 200-stud dodge.
+        velSample.accel = velSample.accel:Lerp((velSample.vel - prev) / dt, 0.25)
+        return velSample.vel, velSample.accel
+    end
+
     -- Lead the shot. Strength is expressed in hundredths of a second of travel
     -- so the slider reads as "how far ahead", and it scales with range because
     -- a distant target drifts further across the screen in the same time.
     local function predictedAim(target: BasePart, camPos: Vector3): Vector3
         local pos = target.Position
         if not State.AimPrediction then return pos end
-        local vel = target.AssemblyLinearVelocity
+        local vel, accel = sampledVelocity(target)
         if vel.Magnitude < 1 then return pos end
         local lead = clampNum(State.AimPredictStrength, 0, 60, 12) / 100
         local range = (pos - camPos).Magnitude
         lead *= math.clamp(range / 150, 0.4, 2.5)
-        return pos + vel * lead
+        -- Quadratic term is what actually tracks a strafe instead of aiming
+        -- where they were. Vertical is still damped: jump arcs are short.
+        local pred = pos
+            + Vector3.new(vel.X, vel.Y * 0.25, vel.Z) * lead
+            + Vector3.new(accel.X, 0, accel.Z) * (0.5 * lead * lead)
+        return pred
     end
 
     -- Linear lerp toward the target snaps hard on the first frame and then
@@ -4816,11 +4909,16 @@ end
 -- Anchoring the root is the reliable way to stay on a node, and also the most
 -- visible thing the hub does. So it is rationed: hold for PinMax seconds, then
 -- rest, and fall back to re-asserting the CFrame every swing pass instead.
-local Pin = { since = 0, restUntil = 0 }
+local Pin = { since = 0, restUntil = 0, drifted = 0 }
 
 local function pinAllowed(): boolean
     if State.UsePin ~= true then return false end
     local now = os.clock()
+    -- Drift override: the rest window exists to break up the anchor signature,
+    -- not to let the character walk off the node. If unanchored position
+    -- holding is losing (high ping, server correction, a shove), take the pin
+    -- back immediately and eat the visibility cost.
+    if now < Pin.drifted then return true end
     if now < Pin.restUntil then return false end
     local cap = clampNum(State.PinMax, 0, 600, 6)
     if cap <= 0 then return false end
@@ -4829,6 +4927,14 @@ local function pinAllowed(): boolean
         return false
     end
     return true
+end
+
+-- Called from pinAt each swing pass. Two consecutive passes where the CFrame
+-- write failed to hold means the unanchored path is not working here.
+local function notePinDrift(distance: number)
+    if distance > 5 then
+        Pin.drifted = os.clock() + 2.5
+    end
 end
 
 local function lockMovement()
@@ -4867,6 +4973,27 @@ Scheduler.add("unlockguard", "logic", 0.1, function()
     if movementLocked and (not hum or hum.Health <= 0) then
         unlockMovement()
     end
+end)
+
+-- While mining with the anchor released, re-assert the stand pose between
+-- swings. A 0.12s HIT_GAP is long enough to slide off on high ping; this
+-- job is the unanchored hold. If even this loses, notePinDrift re-takes
+-- the actual pin for 2.5s.
+Scheduler.add("pinhold", "logic", 0.03, function()
+    if Unloading or not Farm.mining then return end
+    local dest, look = Farm.dest, Farm.look
+    if not dest or not look then return end
+    local root = getRoot()
+    if not root then return end
+    if not root.Anchored then
+        notePinDrift(flatDist(root.Position, dest))
+        if pinAllowed() then
+            lockMovement()
+        end
+    end
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+    root.CFrame = flatLook(dest, look)
 end)
 
 local GatherRemote: Instance? = nil
@@ -5208,13 +5335,15 @@ local EMPTY_NEEDED = 5
 -- Neighbours hit per pass alongside the target. Unbounded fan-out was firing
 -- a couple hundred remotes a second in a dense grove.
 local MAX_FAN = 8
-local FIRE_FLOOR = 0.03
+local function fireFloor(): number
+    return clampNum(State.FireFloor, 0.01, 0.5, 0.03)
+end
 
 -- Per-node landing offset so every teleport does not arrive on the exact same
 -- mathematical spot. Stable per node, so it does not jitter while mining.
 local nodeOffsets = {}
 local nodeOffsetCount = 0
-local function clearNodeOffsets()
+clearNodeOffsets = function()
     table.clear(nodeOffsets)
     nodeOffsetCount = 0
 end
@@ -5234,7 +5363,7 @@ local function nodeOffset(inst: Instance?): (number, number)
         nodeOffsetCount += 1
         o = {
             ang = (math.random() - 0.5) * 0.9,
-            dist = SNAP_OFF + (math.random() - 0.5) * 1.4,
+            dist = SNAP_OFF + (math.random() - 0.5) * clampNum(State.LandSpread, 0, 6, 1.4),
         }
         nodeOffsets[inst] = o
     end
@@ -5303,8 +5432,9 @@ local function fireGather(inst: Instance): boolean
     -- Spread bursts with a little jitter instead of dumping a whole cluster
     -- into one frame.
     local gap = os.clock() - lastFireAt
-    if gap < FIRE_FLOOR then
-        task.wait(FIRE_FLOOR - gap + math.random() * 0.02)
+    local floor = fireFloor()
+    if gap < floor then
+        task.wait(floor - gap + math.random() * 0.02)
     end
     lastFireAt = os.clock()
     local target = folderChild(inst) or inst
@@ -5376,17 +5506,48 @@ end
 -- a speed the server would accept from a fast vehicle.
 local function glideTo(dest: Vector3, lookAt: Vector3)
     local speed = clampNum(State.SoftTeleportSpeed, 40, 800, 220)
-    local deadline = os.clock() + 8
+    local total = 0
+    local root = getRoot()
+    if root then total = (dest - root.Position).Magnitude end
+    -- Budget the travel time from the actual distance rather than a flat 8s.
+    -- A long glide used to hit the deadline mid-flight and get finished off by
+    -- the hard snap, which defeated the point of gliding at all.
+    local deadline = os.clock() + math.clamp(total / math.max(speed, 1) * 2.5 + 1.5, 2, 20)
+    local last = os.clock()
+    local lastRemain = math.huge
+    local stallSince = 0
     while not Unloading and os.clock() < deadline do
-        local root = getRoot()
+        root = getRoot()
         if not root then return end
         local gap = dest - root.Position
-        if gap.Magnitude <= 2.5 then return end
-        local step = math.min(gap.Magnitude, speed * 0.03)
+        local remaining = gap.Magnitude
+        if remaining <= 1.5 then break end
+        local now = os.clock()
+        -- If we stop closing for a third of a second we are fighting terrain
+        -- or a server correction. Snap the rest instead of looping forever.
+        if remaining >= lastRemain - 0.2 then
+            if stallSince == 0 then stallSince = now end
+            if now - stallSince > 0.35 then break end
+        else
+            stallSince = 0
+        end
+        lastRemain = remaining
+        local dt = math.clamp(now - last, 1 / 240, 0.25)
+        last = now
+        local pace = speed * math.clamp(remaining / 20, 0.25, 1)
+        local step = math.min(remaining, pace * dt)
         root.AssemblyLinearVelocity = Vector3.zero
         root.AssemblyAngularVelocity = Vector3.zero
         root.CFrame = flatLook(root.Position + gap.Unit * step, lookAt)
-        task.wait(0.03)
+        task.wait()
+    end
+    -- Always finish on the dest, even if the loop stalled or the last step
+    -- left us 1.6 studs short of the 1.5 threshold.
+    root = getRoot()
+    if root then
+        root.AssemblyLinearVelocity = Vector3.zero
+        root.AssemblyAngularVelocity = Vector3.zero
+        root.CFrame = flatLook(dest, lookAt)
     end
 end
 
@@ -5441,6 +5602,11 @@ local function pinAt(obj: Instance?, treePos: Vector3)
     local dest = standBeside(obj, root.Position, treePos)
     Farm.dest = dest
     Farm.look = treePos
+    -- Measured before we correct it: this is how far the last pass drifted,
+    -- which is the only honest signal for whether unanchored holding works.
+    if not root.Anchored then
+        notePinDrift(flatDist(root.Position, dest))
+    end
     if pinAllowed() then
         if not root.Anchored then lockMovement() end
     elseif movementLocked then
@@ -5452,6 +5618,7 @@ local function pinAt(obj: Instance?, treePos: Vector3)
         root = again
     end
     root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
     root.CFrame = flatLook(dest, treePos)
 end
 
@@ -5584,183 +5751,181 @@ local function farmActive(): boolean
     return State.AutoGather or State.GatherAround or State.TeleportGather or State.LegitMode
 end
 
-task.spawn(function()
-    while ScreenGui.Parent and not Unloading do
-        local ok, err = pcall(function()
-            local wasFarming = false
-            while task.wait(0.08) do
-                if Unloading or not ScreenGui.Parent then break end
+local function rememberCluster(inst: Instance, pos: Vector3)
+    if inst.Parent then
+        Farm.skipUntil[inst] = os.clock() + clampNum(State.SkipSeconds, 2, 60, 8)
+    else
+        skipClusterAt(pos,
+            clampNum(State.ClusterRadius, 20, 250, 90),
+            clampNum(State.ClusterSeconds, 10, 180, 60))
+    end
+end
 
-            if not farmActive() then
-                Farm.dest = nil
-                Farm.look = nil
-                Farm.mining = false
-                -- Only cancel MoveTo when leaving a farm mode. Calling it
-                -- every tick with farm off fights WASD from the moment you inject.
-                if wasFarming then
-                    LegitBot.stop()
-                    wasFarming = false
-                    -- Drop every held node reference while idle so the skip
-                    -- tables cannot pin destroyed instances in memory.
-                    table.clear(Farm.skipUntil)
-                    table.clear(Farm.recentMines)
-                    clearNodeOffsets()
-                end
-                setFarmStatus("Idle\nTarget —  ·  Distance —", Theme.Danger)
-                continue
-            end
-            wasFarming = true
+-- One farm pass. Blocking work (glide, drain, legit clicks) lives here so the
+-- Heartbeat scheduler is never stalled. The scheduler only decides when a
+-- pass may start, and Unload drops the job instead of racing an inner wait.
+local farmJob = { busy = false, wasFarming = false }
 
-            tryBindGather()
-            local needRemote = State.AutoGather or State.GatherAround or State.TeleportGather
-            if not ResourcesFolder or (needRemote and not GatherRemote) then
-                Farm.dest = nil
-                Farm.mining = false
-                setFarmStatus("Waiting for Remotes / Resources…", Theme.Warn)
-                continue
-            end
+local function farmPass()
+    if Unloading or not ScreenGui.Parent then return end
 
-            local hum = getHumanoid()
-            if not hum or hum.Health <= 0 then
-                Farm.dest = nil
-                Farm.look = nil
-                Farm.mining = false
-                setFarmStatus("Dead — farm paused", Theme.Danger)
-                continue
-            end
+    if not farmActive() then
+        Farm.dest = nil
+        Farm.look = nil
+        Farm.mining = false
+        if farmJob.wasFarming then
+            LegitBot.stop()
+            farmJob.wasFarming = false
+            table.clear(Farm.skipUntil)
+            table.clear(Farm.recentMines)
+            clearNodeOffsets()
+        end
+        setFarmStatus("Idle\nTarget —  ·  Distance —", Theme.Danger)
+        return
+    end
+    farmJob.wasFarming = true
 
-            local keep = function()
-                return farmActive() and not Unloading and ScreenGui.Parent ~= nil
-            end
-            local aroundRange = math.max(clampNum(State.HitRange, 10, 120, 45), 18)
-            local fireRadius = math.max(16, math.min(aroundRange, 28))
-            local movingFarm = State.AutoGather or State.TeleportGather
-            ResourceScanner.discover()
-            local nearest = nearestListed()
+    tryBindGather()
+    local needRemote = State.AutoGather or State.GatherAround or State.TeleportGather
+    if not ResourcesFolder or (needRemote and not GatherRemote) then
+        Farm.dest = nil
+        Farm.mining = false
+        setFarmStatus("Waiting for Remotes / Resources…", Theme.Warn)
+        return
+    end
 
-            if State.LegitMode then
-                if not nearest then
-                    setFarmStatus("Searching...\nNo listed resources in cache", Theme.Accent)
-                    continue
-                end
-                Farm.dest = nil
-                Farm.mining = false
-                local reach = clampNum(State.LegitReach, 4, 20, 8)
-                if nearest.dist > reach then
-                    LegitBot.walkTo(nearest.pos)
-                    setFarmStatus(
-                        string.format("Legit walk\n%s  ·  %.0f studs", nearest.inst.Name, nearest.dist),
-                        Theme.Accent
-                    )
-                    continue
-                end
-                LegitBot.stop()
-                setFarmStatus(
-                    string.format("Legit farm\n%s  ·  %.0f studs", nearest.inst.Name, nearest.dist),
-                    Theme.Success
-                )
-                for _, r in listedNearby(reach, 12) do
-                    if not keep() then break end
-                    LegitBot.click(r.pos)
-                    -- Occasionally hesitate the way a person would.
-                    if math.random() < 0.15 then
-                        task.wait(0.2 + math.random() * 0.5)
-                    end
-                end
-                local delay = clampNum(State.LegitHitDelay, 0.4, 5, 1.2)
-                task.wait(math.max(delay, 0.3) + math.random() * 0.4)
-                doAutoSell()
-                continue
-            end
+    local hum = getHumanoid()
+    if not hum or hum.Health <= 0 then
+        Farm.dest = nil
+        Farm.look = nil
+        Farm.mining = false
+        setFarmStatus("Dead — farm paused", Theme.Danger)
+        return
+    end
 
-            -- Gather Around always mines what is next to you, even if Auto /
-            -- Teleport Gather is also on. It does not wait for those modes.
-            if State.GatherAround then
-                local localNodes = listedNearby(aroundRange, 32)
-                if #localNodes > 0 then
-                    Farm.mining = true
-                    Farm.dest = nil
-                    setFarmStatus(
-                        string.format("Gather Around\n%d listed node%s nearby", #localNodes, #localNodes == 1 and "" or "s"),
-                        Theme.Success
-                    )
-                    mineCluster(aroundRange, keep)
-                    doAutoSell()
-                    Farm.mining = false
-                elseif not movingFarm then
-                    Farm.dest = nil
-                    if nearest then
-                        setFarmStatus(
-                            string.format("Gather Around\nNearest %s  ·  %.0f studs — walk closer", nearest.inst.Name, nearest.dist),
-                            Theme.Accent
-                        )
-                    else
-                        setFarmStatus("Gather Around\nNothing listed nearby", Theme.Accent)
-                    end
-                end
-            end
+    local keep = function()
+        return farmActive() and not Unloading and ScreenGui.Parent ~= nil
+    end
+    local aroundRange = math.max(clampNum(State.HitRange, 10, 120, 45), 18)
+    local fireRadius = math.max(16, math.min(aroundRange, 28))
+    local movingFarm = State.AutoGather or State.TeleportGather
+    ResourceScanner.discover()
+    local nearest = nearestListed()
 
-            if movingFarm then
-                -- Gather Around owns the local cluster when it is on, and its
-                -- radius is the larger one. Draining here as well double-fired
-                -- every node and flapped the status between the two modes.
-                if State.GatherAround then
-                    if listedNearby(aroundRange, 1)[1] ~= nil then continue end
-                else
-                    local localLive = listedNearby(fireRadius, 1)
-                    if localLive[1] then
-                        drainUntilGone(fireRadius, localLive[1].inst, localLive[1].pos, keep, "Mining")
-                        if localLive[1].inst.Parent then
-                            Farm.skipUntil[localLive[1].inst] = os.clock() + 8
-                        else
-                            skipClusterAt(localLive[1].pos, 70, 60)
-                        end
-                        doAutoSell()
-                        unlockMovement()
-                        continue
-                    end
-                end
-                local target = nextTravelTarget()
-                if target then
-                    setFarmStatus(
-                        string.format("Teleport\n%s  ·  %.0f studs", target.inst.Name, target.dist),
-                        Theme.Accent
-                    )
-                    local rootNow = getRoot()
-                    local dest = if rootNow then standBeside(target.inst, rootNow.Position, target.pos) else target.pos
-                    if not rootNow or not inStandRange(rootNow.Position, dest) then
-                        snapTeleport(target.inst, target.pos)
-                    else
-                        pinAt(target.inst, target.pos)
-                    end
-                    drainUntilGone(fireRadius, target.inst, target.pos, keep, "Teleport mine")
-                    if target.inst.Parent then
-                        Farm.skipUntil[target.inst] = os.clock() + 8
-                    else
-                        skipClusterAt(target.pos, 70, 60)
-                    end
-                    doAutoSell()
-                    unlockMovement()
-                    Farm.dest = nil
-                    continue
-                end
-                setFarmStatus("Looking for listed nodes in view / world…", Theme.Warn)
+    if State.LegitMode then
+        if not nearest then
+            setFarmStatus("Searching...\nNo listed resources in cache", Theme.Accent)
+            return
+        end
+        Farm.dest = nil
+        Farm.mining = false
+        local reach = clampNum(State.LegitReach, 4, 20, 8)
+        if nearest.dist > reach then
+            LegitBot.walkTo(nearest.pos)
+            setFarmStatus(
+                string.format("Legit walk\n%s  ·  %.0f studs", nearest.inst.Name, nearest.dist),
+                Theme.Accent
+            )
+            return
+        end
+        LegitBot.stop()
+        setFarmStatus(
+            string.format("Legit farm\n%s  ·  %.0f studs", nearest.inst.Name, nearest.dist),
+            Theme.Success
+        )
+        for _, r in listedNearby(reach, 12) do
+            if not keep() then break end
+            LegitBot.click(r.pos)
+            if math.random() < 0.15 then
+                task.wait(0.2 + math.random() * 0.5)
             end
         end
-        end)
+        local delay = clampNum(State.LegitHitDelay, 0.4, 5, 1.2)
+        task.wait(math.max(delay, 0.3) + math.random() * 0.4)
+        doAutoSell()
+        return
+    end
 
-        cancelMoveTween()
-        unlockMovement()
-        Farm.mining = false
-        Farm.dest = nil
-        if Unloading or not ScreenGui.Parent then break end
-        if not ok then
-            log("Gather loop error (restarting): " .. tostring(err))
-            task.wait(0.4)
-        else
-            break
+    if State.GatherAround then
+        local localNodes = listedNearby(aroundRange, 32)
+        if #localNodes > 0 then
+            Farm.mining = true
+            Farm.dest = nil
+            setFarmStatus(
+                string.format("Gather Around\n%d listed node%s nearby", #localNodes, #localNodes == 1 and "" or "s"),
+                Theme.Success
+            )
+            mineCluster(aroundRange, keep)
+            doAutoSell()
+            Farm.mining = false
+        elseif not movingFarm then
+            Farm.dest = nil
+            if nearest then
+                setFarmStatus(
+                    string.format("Gather Around\nNearest %s  ·  %.0f studs — walk closer", nearest.inst.Name, nearest.dist),
+                    Theme.Accent
+                )
+            else
+                setFarmStatus("Gather Around\nNothing listed nearby", Theme.Accent)
+            end
         end
     end
+
+    if not movingFarm then return end
+
+    -- Gather Around owns the local cluster when it is on. Draining here as
+    -- well double-fired every node and flapped the status between the two.
+    if State.GatherAround then
+        if listedNearby(aroundRange, 1)[1] ~= nil then return end
+    else
+        local localLive = listedNearby(fireRadius, 1)
+        if localLive[1] then
+            drainUntilGone(fireRadius, localLive[1].inst, localLive[1].pos, keep, "Mining")
+            rememberCluster(localLive[1].inst, localLive[1].pos)
+            doAutoSell()
+            unlockMovement()
+            return
+        end
+    end
+
+    local target = nextTravelTarget()
+    if not target then
+        setFarmStatus("Looking for listed nodes in view / world…", Theme.Warn)
+        return
+    end
+    setFarmStatus(
+        string.format("Teleport\n%s  ·  %.0f studs", target.inst.Name, target.dist),
+        Theme.Accent
+    )
+    local rootNow = getRoot()
+    local dest = if rootNow then standBeside(target.inst, rootNow.Position, target.pos) else target.pos
+    if not rootNow or not inStandRange(rootNow.Position, dest) then
+        snapTeleport(target.inst, target.pos)
+    else
+        pinAt(target.inst, target.pos)
+    end
+    drainUntilGone(fireRadius, target.inst, target.pos, keep, "Teleport mine")
+    rememberCluster(target.inst, target.pos)
+    doAutoSell()
+    unlockMovement()
+    Farm.dest = nil
+end
+
+Scheduler.add("farm", "logic", 0.08, function()
+    if Unloading or not ScreenGui.Parent then return end
+    if farmJob.busy then return end
+    farmJob.busy = true
+    task.spawn(function()
+        local ok, err = pcall(farmPass)
+        farmJob.busy = false
+        if not ok then
+            log("Gather pass error: " .. tostring(err))
+            cancelMoveTween()
+            unlockMovement()
+            Farm.mining = false
+            Farm.dest = nil
+        end
+    end)
 end)
 
 -- ============================================================
@@ -5791,5 +5956,5 @@ task.defer(function()
         if not Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("v1.9.4 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("v1.9.5 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
