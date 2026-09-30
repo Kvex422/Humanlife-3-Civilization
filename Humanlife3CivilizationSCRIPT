@@ -2366,6 +2366,16 @@ function ResourceScanner.count(): number
     return #farmStore.items
 end
 
+-- The only sanctioned way to move a record. Writing rec.pos directly would
+-- leave it filed under its old cell, where no query would ever find it again.
+function ResourceScanner.reposition(rec: any, pos: Vector3)
+    rec.pos = pos
+    if rec.cell ~= Grid.cellOf(pos) then
+        Grid.remove(rec)
+        Grid.insert(rec)
+    end
+end
+
 -- Visits every record whose cell overlaps the circle. Callers still range-check
 -- precisely; this only narrows the candidate set.
 function ResourceScanner.queryRadius(pos: Vector3, radius: number, visit: (any) -> ())
@@ -2721,7 +2731,7 @@ Pages["Auto Gather"] = function()
     sliderRow(cT, "Legit Hit Delay", 124, 0.4, 5, State.LegitHitDelay, "s", function(v) State.LegitHitDelay = v end)
 
     sectionTitle("Stealth Profile", y); y += 34
-    local cS = card(y, 340); y += 350
+    local cS = card(y, 514); y += 524
     local profileNote = new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
@@ -2763,6 +2773,15 @@ Pages["Auto Gather"] = function()
         State.VelocityClamp = v
     end)
     sliderRow(cS, "Max anchor hold", 272, 0, 60, State.PinMax, "s", function(v) State.PinMax = v end)
+    sliderRow(cS, "Glide Speed", 330, 40, 800, State.SoftTeleportSpeed, " studs/s", function(v)
+        State.SoftTeleportSpeed = v
+    end)
+    sliderRow(cS, "Hop Distance", 388, 40, 600, State.HopDistance, " studs", function(v)
+        State.HopDistance = v
+    end)
+    sliderRow(cS, "Velocity Cap", 446, 16, 500, State.MaxVelocity, " studs/s", function(v)
+        State.MaxVelocity = v
+    end)
 
     sectionTitle("Resource Priority", y); y += 34
     local cP = card(y, 12 + #RESOURCE_LIST * 58 + 62)
@@ -4405,7 +4424,7 @@ do
                 if rdx * rdx + rdy * rdy + rdz * rdz > maxD2 * 1.6 then return end
                 local pos = scanPos(obj)
                 if pos then
-                    entry.pos = pos
+                    ResourceScanner.reposition(entry, pos)
                 else
                     pos = entry.pos
                 end
