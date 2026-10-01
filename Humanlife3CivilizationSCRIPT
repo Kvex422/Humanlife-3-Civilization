@@ -18,7 +18,10 @@ end
 local playerGui = player:WaitForChild("PlayerGui")
 
 local function isHubInstance(name: string): boolean
-    return name == "SamuraiHub" or name == "SamuraiHubESP"
+    return name == "TroyHub" or name == "TroyHubESP"
+        or name == "TroyHubFOV" or name == "TroyHubKill"
+        or name == "TroyHubTouch"
+        or name == "SamuraiHub" or name == "SamuraiHubESP"
         or name == "SamuraiHubFOV" or name == "SamuraiHubKill"
         or name == "SamuraiHubTouch"
 end
@@ -26,7 +29,7 @@ end
 -- Stop a previous inject before this copy builds a GUI. Destroying the
 -- old ScreenGui alone leaves its Heartbeat / input / farm loops running.
 pcall(function()
-    local prev = rawget(_G, "SamuraiHubUnload")
+    local prev = rawget(_G, "TroyHubUnload") or rawget(_G, "SamuraiHubUnload")
     if typeof(prev) == "function" then
         prev()
     end
@@ -41,23 +44,23 @@ end
 --  THEME
 -- ============================================================
 local Theme = {
-    Bg         = Color3.fromRGB(14, 14, 18),
-    Glass      = Color3.fromRGB(24, 24, 30),
-    GlassHi    = Color3.fromRGB(32, 32, 40),
-    Stroke     = Color3.fromRGB(52, 52, 66),
-    StrokeHi   = Color3.fromRGB(88, 68, 180),
-    Accent     = Color3.fromRGB(124, 92, 255),
-    Accent2    = Color3.fromRGB(180, 120, 255),
-    Success    = Color3.fromRGB(80, 220, 140),
-    Warn       = Color3.fromRGB(255, 190, 80),
-    Danger     = Color3.fromRGB(255, 90, 110),
-    Text       = Color3.fromRGB(238, 238, 248),
-    TextDim    = Color3.fromRGB(148, 148, 170),
-    TextFaint  = Color3.fromRGB(96, 96, 116),
-    TrackOff   = Color3.fromRGB(52, 52, 66),
-    Font       = Enum.Font.GothamMedium,
-    FontBold   = Enum.Font.GothamBold,
-    FontBlack  = Enum.Font.GothamBlack,
+    Bg         = Color3.fromRGB(16, 16, 16),
+    Glass      = Color3.fromRGB(26, 26, 26),
+    GlassHi    = Color3.fromRGB(36, 36, 36),
+    Stroke     = Color3.fromRGB(48, 48, 48),
+    StrokeHi   = Color3.fromRGB(196, 148, 64),
+    Accent     = Color3.fromRGB(212, 160, 64),
+    Accent2    = Color3.fromRGB(196, 112, 48),
+    Success    = Color3.fromRGB(92, 196, 128),
+    Warn       = Color3.fromRGB(232, 176, 72),
+    Danger     = Color3.fromRGB(224, 88, 88),
+    Text       = Color3.fromRGB(240, 238, 232),
+    TextDim    = Color3.fromRGB(160, 156, 148),
+    TextFaint  = Color3.fromRGB(104, 100, 94),
+    TrackOff   = Color3.fromRGB(48, 48, 48),
+    Font       = Enum.Font.Gotham,
+    FontBold   = Enum.Font.GothamMedium,
+    FontBlack  = Enum.Font.GothamBold,
 }
 
 -- ============================================================
@@ -298,8 +301,8 @@ local State = {
     UIScale            = 1,
     AutoUIScale        = true,
     TouchButton        = true,
-    ThemeAccent        = Color3.fromRGB(125, 220, 255),
-    ThemeAccent2       = Color3.fromRGB(167, 139, 250),
+    ThemeAccent        = Color3.fromRGB(212, 160, 64),
+    ThemeAccent2       = Color3.fromRGB(196, 112, 48),
 
     AimboT             = false,
     AimKey             = "Hold",
@@ -314,7 +317,7 @@ local State = {
     TeamCheck          = false,
     FriendCheck        = false,
     ShowFOVCircle      = true,
-    FOVColor           = Color3.fromRGB(125, 220, 255),
+    FOVColor           = Color3.fromRGB(212, 160, 64),
     FOVFollowMouse     = false,
     TargetIndicator    = false,
     AimPrediction      = false,
@@ -340,7 +343,7 @@ local function log(line)
     while #State._debugLog > 8 do table.remove(State._debugLog) end
     local label = State._debugLabel
     if label and label.Parent then label.Text = table.concat(State._debugLog, "\n") end
-    print("[SamuraiHub]", line)
+    print("[Troy]", line)
 end
 
 -- ============================================================
@@ -499,7 +502,7 @@ end
 --  ROOT GUI
 -- ============================================================
 local ScreenGui = new("ScreenGui", {
-    Name = "SamuraiHub", ResetOnSpawn = false,
+    Name = "TroyHub", ResetOnSpawn = false,
     ZIndexBehavior = Enum.ZIndexBehavior.Sibling, IgnoreGuiInset = true,
     DisplayOrder = 999, Parent = playerGui,
 })
@@ -532,50 +535,48 @@ pcall(function()
 end)
 
 local Main = new("Frame", {
-    Name = "Main", Size = UDim2.fromOffset(860, 560),
+    Name = "Main", Size = UDim2.fromOffset(880, 580),
     Position = UDim2.fromScale(0.5, 0.5), AnchorPoint = Vector2.new(0.5, 0.5),
     BackgroundColor3 = Theme.Bg, BorderSizePixel = 0, Parent = ScreenGui,
 })
-corner(14, Main)
+corner(16, Main)
 stroke(Theme.Stroke, 1, Main)
 
 local Header = new("Frame", {
-    Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = Theme.Glass,
+    Size = UDim2.new(1, 0, 0, 58), BackgroundColor3 = Theme.Glass,
     BorderSizePixel = 0, Active = true, Parent = Main,
 })
-corner(14, Header)
+corner(16, Header)
 new("Frame", {
-    Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14),
+    Size = UDim2.new(1, 0, 0, 16), Position = UDim2.new(0, 0, 1, -16),
     BackgroundColor3 = Theme.Glass, BorderSizePixel = 0, Parent = Header,
 })
 local HeaderStrip = new("Frame", {
-    Size = UDim2.new(1, 0, 0, 2), Position = UDim2.new(0, 0, 1, -2),
-    BackgroundColor3 = Color3.new(1,1,1), BorderSizePixel = 0, Parent = Header,
+    Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1),
+    BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, Parent = Header,
 })
-gradient(Theme.Accent, Theme.Accent2, 0, HeaderStrip)
 
 local Logo = new("Frame", {
-    Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(14, 9),
-    BackgroundColor3 = Color3.new(1,1,1), BorderSizePixel = 0, Parent = Header,
+    Size = UDim2.fromOffset(32, 32), Position = UDim2.fromOffset(16, 13),
+    BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, Parent = Header,
 })
-corner(9, Logo)
-gradient(Theme.Accent, Theme.Accent2, 45, Logo)
+corner(8, Logo)
 new("TextLabel", {
     Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-    Font = Theme.FontBlack, Text = "S", TextColor3 = Color3.new(1,1,1),
-    TextSize = 18, Parent = Logo,
+    Font = Theme.FontBlack, Text = "T", TextColor3 = Theme.Bg,
+    TextSize = 16, Parent = Logo,
 })
 
 new("TextLabel", {
-    Size = UDim2.fromOffset(320, 20), Position = UDim2.fromOffset(60, 8),
-    BackgroundTransparency = 1, Font = Theme.FontBold, Text = "Samurai Hub",
-    TextColor3 = Theme.Text, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+    Size = UDim2.fromOffset(360, 20), Position = UDim2.fromOffset(58, 10),
+    BackgroundTransparency = 1, Font = Theme.FontBold, Text = "Troy",
+    TextColor3 = Theme.Text, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left,
     Parent = Header,
 })
 new("TextLabel", {
-    Size = UDim2.fromOffset(320, 16), Position = UDim2.fromOffset(60, 26),
+    Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization  ·  v1.9.5",
+    Text = "Humanlife 3: Civilization   ·   v1.9.7",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -625,6 +626,7 @@ local function Unload()
     if noclipCleanup then noclipCleanup() end
     if infJumpCleanup then infJumpCleanup() end
     if fullbrightCleanup then fullbrightCleanup() end
+    pcall(function() RunService:UnbindFromRenderStep("TroyHubLighting") end)
     pcall(function() RunService:UnbindFromRenderStep("SamuraiHubLighting") end)
     if xrayCleanup then xrayCleanup() end
     if aimbotCleanup then aimbotCleanup() end
@@ -644,6 +646,9 @@ local function Unload()
     disconnectAll()
     clearPageScope()
     pcall(function()
+        if rawget(_G, "TroyHubUnload") == Unload then
+            rawset(_G, "TroyHubUnload", nil)
+        end
         if rawget(_G, "SamuraiHubUnload") == Unload then
             rawset(_G, "SamuraiHubUnload", nil)
         end
@@ -654,15 +659,16 @@ local function Unload()
             pcall(function() g:Destroy() end)
         end
     end
-    print("[SamuraiHub] Unloaded")
+    print("[Troy] Unloaded")
 end
 
 pcall(function()
+    rawset(_G, "TroyHubUnload", Unload)
     rawset(_G, "SamuraiHubUnload", Unload)
 end)
 do
     local hubKill = Instance.new("BindableEvent")
-    hubKill.Name = "SamuraiHubKill"
+    hubKill.Name = "TroyHubKill"
     hubKill.Parent = playerGui
     track(hubKill.Event:Connect(Unload))
     track(hubKill.AncestryChanged:Connect(function(_, parent)
@@ -700,7 +706,7 @@ makeWinBtn("✕", -44, Theme.Danger, CloseAndUnload)
 makeWinBtn("–", -78, Theme.Accent, function() ScreenGui.Enabled = false end)
 
 local Sidebar = new("Frame", {
-    Size = UDim2.new(0, 200, 1, -52), Position = UDim2.fromOffset(0, 52),
+    Size = UDim2.new(0, 204, 1, -58), Position = UDim2.fromOffset(0, 58),
     BackgroundColor3 = Theme.Glass, BorderSizePixel = 0, Parent = Main,
 })
 corner(0, Sidebar)
@@ -710,8 +716,8 @@ new("Frame", {
 })
 
 local Content = new("ScrollingFrame", {
-    Name = "Content", Size = UDim2.new(1, -216, 1, -68),
-    Position = UDim2.fromOffset(208, 60), BackgroundTransparency = 1,
+    Name = "Content", Size = UDim2.new(1, -220, 1, -74),
+    Position = UDim2.fromOffset(212, 66), BackgroundTransparency = 1,
     BorderSizePixel = 0, ScrollBarThickness = 4,
     ScrollBarImageColor3 = Theme.Accent, ScrollBarImageTransparency = 0.4,
     CanvasSize = UDim2.new(0, 0, 0, 0),
@@ -729,7 +735,7 @@ do
     local scaler = new("UIScale", { Scale = 1, Parent = Main })
 
     local function autoScaleFor(viewport: Vector2): number
-        local fit = math.min((viewport.X - 24) / 860, (viewport.Y - 24) / 560)
+        local fit = math.min((viewport.X - 24) / 880, (viewport.Y - 24) / 580)
         if fit < 1 then
             -- Small screen: shrink just enough to fit, never below legibility.
             return math.max(fit, 0.5)
@@ -1067,10 +1073,11 @@ function Features.setXRay(on: boolean)
     end
 end
 
--- The game writes ClockTime / Ambient / fog every frame, so a one-shot
--- Fullbright lasts about a second. Re-apply after the game's lighting
--- scripts via BindToRenderStep (Last), and mute Atmosphere / CC / bloom.
-local LIGHT_BIND = "SamuraiHubLighting"
+-- The game writes ClockTime / Ambient / fog every frame. Thresholded writes
+-- lost that fight: the day-cycle would land just inside EPS, we would skip,
+-- and the world flickered dark. Force the values every late RenderStep and
+-- every Heartbeat, and keep Atmosphere / PostEffects dead the same way.
+local LIGHT_BIND = "TroyHubLighting"
 local lightingBound = false
 local lightingPropConns = {}
 local lightingApplying = false
@@ -1084,6 +1091,7 @@ local function unbindLightingStep()
     end
     table.clear(lightingPropConns)
     pcall(function() RunService:UnbindFromRenderStep(LIGHT_BIND) end)
+    pcall(function() RunService:UnbindFromRenderStep("SamuraiHubLighting") end)
     lightingBound = false
 end
 
@@ -1115,6 +1123,10 @@ local function restoreFullbrightSaved()
         Lighting.FogColor = saved.FogColor
         Lighting.GlobalShadows = saved.GlobalShadows
         Lighting.ExposureCompensation = saved.Exposure
+        Lighting.ColorShift_Top = saved.ColorShiftTop
+        Lighting.ColorShift_Bottom = saved.ColorShiftBottom
+        if saved.EnvDiff ~= nil then Lighting.EnvironmentDiffuseScale = saved.EnvDiff end
+        if saved.EnvSpec ~= nil then Lighting.EnvironmentSpecularScale = saved.EnvSpec end
         if saved.Clouds and saved.Clouds.inst and saved.Clouds.inst.Parent then
             saved.Clouds.inst.Cover = saved.Clouds.Cover
             saved.Clouds.inst.Density = saved.Clouds.Density
@@ -1125,77 +1137,84 @@ local function restoreFullbrightSaved()
     end
 end
 
-local function tamePostEffect(inst: Instance)
+local function rememberFx(inst: Instance, props: { [string]: any })
+    if fxSaved[inst] then return end
+    local snap = {}
+    for k in props do
+        local ok, v = pcall(function() return (inst :: any)[k] end)
+        if ok then snap[k] = v end
+    end
+    fxSaved[inst] = snap
+end
+
+local function killAtmosphere(atmo: Atmosphere)
+    rememberFx(atmo, { Density = true, Haze = true, Glare = true, Offset = true })
+    atmo.Density = 0
+    atmo.Haze = 0
+    atmo.Glare = 0
+    pcall(function() atmo.Offset = 0 end)
+end
+
+local function killPostEffect(inst: Instance)
+    if not inst:IsA("PostEffect") then return end
+    rememberFx(inst, { Enabled = true })
+    inst.Enabled = false
+end
+
+local function killClouds(clouds: Instance)
+    rememberFx(clouds, { Cover = true, Density = true, Enabled = true })
+    pcall(function()
+        (clouds :: any).Cover = 0
+        (clouds :: any).Density = 0
+        if (clouds :: any).Enabled ~= nil then
+            (clouds :: any).Enabled = false
+        end
+    end)
+end
+
+local function tameLightingChild(inst: Instance)
     if inst:IsA("Atmosphere") then
-        if not fxSaved[inst] then
-            fxSaved[inst] = { Density = inst.Density, Haze = inst.Haze, Glare = inst.Glare }
-        end
-        pcall(function()
-            inst.Density = 0
-            inst.Haze = 0
-            inst.Glare = 0
-        end)
+        killAtmosphere(inst)
     elseif inst:IsA("PostEffect") then
-        if not fxSaved[inst] then
-            fxSaved[inst] = { Enabled = inst.Enabled }
-        end
-        inst.Enabled = false
+        killPostEffect(inst)
     end
 end
 
-local lastFxTame = 0
 local FB_WHITE = Color3.new(1, 1, 1)
--- Exact float inequality made this rewrite every frame forever: the engine
--- stores a rounded value back, so `~= 3` stayed true and the write fought the
--- game's own writer. ClockTime is looser because the day cycle ticks it by
--- more than 0.01 every frame, and rewriting that is what flickered.
-local FB_EPS = 0.04
-local FB_CLOCK_EPS = 0.2
-
-local function farOff(current: number, want: number): boolean
-    return math.abs(current - want) > FB_EPS
-end
-
-local function colorOff(current: Color3, want: Color3): boolean
-    return math.abs(current.R - want.R) > FB_EPS
-        or math.abs(current.G - want.G) > FB_EPS
-        or math.abs(current.B - want.B) > FB_EPS
-end
+local FB_AMBIENT = Color3.fromRGB(210, 210, 210)
 
 local function applyFullbrightFrame()
     if lightingApplying then return end
     lightingApplying = true
     local L = Lighting
-    if math.abs(L.ClockTime - 14) > FB_CLOCK_EPS then L.ClockTime = 14 end
-    if farOff(L.Brightness, 3) then L.Brightness = 3 end
-    if colorOff(L.Ambient, FB_WHITE) then L.Ambient = FB_WHITE end
-    if colorOff(L.OutdoorAmbient, FB_WHITE) then L.OutdoorAmbient = FB_WHITE end
-    if farOff(L.FogStart, 0) then L.FogStart = 0 end
-    if L.FogEnd < 1e5 then L.FogEnd = 1e6 end
-    if L.GlobalShadows then L.GlobalShadows = false end
-    pcall(function()
-        if farOff(L.ExposureCompensation, 0.25) then L.ExposureCompensation = 0.25 end
-    end)
-    local now = os.clock()
-    if now - lastFxTame > 0.8 then
-        lastFxTame = now
-        local atmo = L:FindFirstChildOfClass("Atmosphere")
-        if atmo then
-            if farOff(atmo.Density, 0) then atmo.Density = 0 end
-            if farOff(atmo.Haze, 0) then atmo.Haze = 0 end
-            if farOff(atmo.Glare, 0) then atmo.Glare = 0 end
-        end
-        for _, inst in L:GetChildren() do
-            if inst:IsA("PostEffect") and inst.Enabled then
-                tamePostEffect(inst)
-            end
-        end
-        local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds")
-        if clouds then
-            if farOff(clouds.Cover, 0) then clouds.Cover = 0 end
-            if farOff(clouds.Density, 0) then clouds.Density = 0 end
+    -- Unconditional writes. The game's day/night script always runs; we have
+    -- to land after it, not debate whether the value is "close enough".
+    L.ClockTime = 12.5
+    L.Brightness = 2
+    L.Ambient = FB_AMBIENT
+    L.OutdoorAmbient = FB_WHITE
+    L.FogStart = 1e5
+    L.FogEnd = 1e6
+    L.FogColor = FB_WHITE
+    L.GlobalShadows = false
+    L.ColorShift_Top = FB_WHITE
+    L.ColorShift_Bottom = FB_WHITE
+    pcall(function() L.ExposureCompensation = 0 end)
+    pcall(function() L.EnvironmentDiffuseScale = 0 end)
+    pcall(function() L.EnvironmentSpecularScale = 0 end)
+    pcall(function() L.ShadowSoftness = 0 end)
+
+    local atmo = L:FindFirstChildOfClass("Atmosphere")
+    if atmo then killAtmosphere(atmo) end
+    for _, inst in L:GetChildren() do
+        if inst:IsA("PostEffect") then
+            killPostEffect(inst)
+        elseif inst:IsA("Atmosphere") then
+            killAtmosphere(inst)
         end
     end
+    local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds")
+    if clouds then killClouds(clouds) end
     lightingApplying = false
 end
 
@@ -1204,7 +1223,7 @@ local function lightingStep()
     if State.Fullbright then
         applyFullbrightFrame()
     elseif State.NoShadows then
-        if Lighting.GlobalShadows then Lighting.GlobalShadows = false end
+        Lighting.GlobalShadows = false
     end
 end
 
@@ -1212,14 +1231,16 @@ local function bindLightingStep()
     if lightingBound or Unloading then return end
     lightingBound = true
     pcall(function() RunService:UnbindFromRenderStep(LIGHT_BIND) end)
-    -- BindToRenderStep(Last) is the pass that actually sits after the game's
-    -- lighting writer. A second Heartbeat + defer write was fighting that
-    -- writer twice more per frame and is what still flickered. The scheduler
-    -- job is only a slow backup if the bind is stripped.
-    Scheduler.add("lighting", "logic", 0.12, lightingStep)
+    -- Last+100 sits after the game's own Last bind. Heartbeat covers the
+    -- frames where a lighting script runs after RenderStep.
+    Scheduler.add("lighting", "logic", 0, lightingStep)
     pcall(function()
-        RunService:BindToRenderStep(LIGHT_BIND, Enum.RenderPriority.Last.Value + 50, lightingStep)
+        RunService:BindToRenderStep(LIGHT_BIND, Enum.RenderPriority.Last.Value + 100, lightingStep)
     end)
+    table.insert(lightingPropConns, Lighting.ChildAdded:Connect(function(inst)
+        if Unloading or not State.Fullbright then return end
+        tameLightingChild(inst)
+    end))
 end
 
 local function syncLightingBind()
@@ -1245,6 +1266,10 @@ function Features.setFullbright(on: boolean)
                 FogColor = Lighting.FogColor,
                 GlobalShadows = Lighting.GlobalShadows,
                 Exposure = Lighting.ExposureCompensation,
+                ColorShiftTop = Lighting.ColorShift_Top,
+                ColorShiftBottom = Lighting.ColorShift_Bottom,
+                EnvDiff = Lighting.EnvironmentDiffuseScale,
+                EnvSpec = Lighting.EnvironmentSpecularScale,
                 Clouds = clouds and { inst = clouds, Cover = clouds.Cover, Density = clouds.Density } or nil,
             }
         end
@@ -1323,7 +1348,8 @@ local rerenderCurrentPage: (() -> ())? = nil
 
 local Config = {}
 do
-    local FILE = "SamuraiHub_config.json"
+    local FILE = "TroyHub_config.json"
+    local LEGACY_FILE = "SamuraiHub_config.json"
 
     local function enumToString(v: EnumItem): string
         return tostring(v)
@@ -1463,6 +1489,13 @@ do
             if cam then cam.FieldOfView = clampNum(State.FOV, 1, 120, EnvDefaults.FieldOfView) end
             local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
             if hum and hum:IsA("Humanoid") then applyWalkSettings(hum) end
+            -- Old ice/violet saves would paint the new Troy UI blue again.
+            local a = State.ThemeAccent
+            if typeof(a) == "Color3" and a.B > 0.65 and a.B > a.R + 0.1 then
+                State.ThemeAccent = Theme.Accent
+                State.ThemeAccent2 = Theme.Accent2
+                State.FOVColor = Theme.Accent
+            end
         end)
         -- Deferred: this is usually reached from a button on the very page
         -- about to be rebuilt, and destroying a widget inside its own click
@@ -1515,16 +1548,18 @@ do
             Notifications.warn("Config", "Executor has no readfile")
             return false
         end
-        if type(exists) == "function" then
-            local ok, present = pcall(exists, FILE)
-            if ok and not present then
-                Notifications.info("Config", "No saved config yet")
-                return false
+        local function tryRead(path: string): string?
+            if type(exists) == "function" then
+                local ok, present = pcall(exists, path)
+                if ok and not present then return nil end
             end
+            local read, text = pcall(reader, path)
+            if read and type(text) == "string" then return text end
+            return nil
         end
-        local ok, text = pcall(reader, FILE)
-        if not ok or type(text) ~= "string" then
-            Notifications.warn("Config", "Could not read " .. FILE)
+        local text = tryRead(FILE) or tryRead(LEGACY_FILE)
+        if not text then
+            Notifications.info("Config", "No saved config yet")
             return false
         end
         local applied = Config.deserialize(text)
@@ -1540,15 +1575,21 @@ do
     function Config.autoLoad()
         local reader = rawget(_G, "readfile")
         local exists = rawget(_G, "isfile")
-        if type(reader) ~= "function" or type(exists) ~= "function" then return end
-        local ok, present = pcall(exists, FILE)
-        if not ok or not present then return end
-        local read, text = pcall(reader, FILE)
-        if read and type(text) == "string" then
-            local applied = Config.deserialize(text)
-            if applied > 0 then
-                log(string.format("config: restored %d settings", applied))
+        if type(reader) ~= "function" then return end
+        local function tryRead(path: string): string?
+            if type(exists) == "function" then
+                local ok, present = pcall(exists, path)
+                if not ok or not present then return nil end
             end
+            local read, text = pcall(reader, path)
+            if read and type(text) == "string" then return text end
+            return nil
+        end
+        local text = tryRead(FILE) or tryRead(LEGACY_FILE)
+        if not text then return end
+        local applied = Config.deserialize(text)
+        if applied > 0 then
+            log(string.format("config: restored %d settings", applied))
         end
     end
 
@@ -1807,13 +1848,18 @@ end
 -- ============================================================
 local function sectionTitle(text, y, textSize)
     local holder = new("Frame", {
-        Size = UDim2.new(1, -8, 0, 26), Position = UDim2.fromOffset(0, y),
+        Size = UDim2.new(1, -8, 0, 28), Position = UDim2.fromOffset(0, y),
         BackgroundTransparency = 1, Parent = Content,
     })
+    local tick = new("Frame", {
+        Size = UDim2.fromOffset(3, 14), Position = UDim2.fromOffset(0, 6),
+        BackgroundColor3 = Theme.Accent, BorderSizePixel = 0, Parent = holder,
+    })
+    corner(1, tick)
     new("TextLabel", {
-        Size = UDim2.new(1, -20, 1, 0), Position = UDim2.fromOffset(0, 0),
+        Size = UDim2.new(1, -20, 1, 0), Position = UDim2.fromOffset(12, 0),
         BackgroundTransparency = 1, Font = Theme.FontBold, Text = text,
-        TextColor3 = Theme.Text, TextSize = textSize or 14,
+        TextColor3 = Theme.Text, TextSize = textSize or 13,
         TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
     })
     return holder
@@ -1824,7 +1870,7 @@ local function card(y, height)
         Size = UDim2.new(1, -8, 0, height), Position = UDim2.fromOffset(0, y),
         BackgroundColor3 = Theme.Glass, BorderSizePixel = 0, Parent = Content,
     })
-    corner(12, frame)
+    corner(10, frame)
     local s = stroke(Theme.Stroke, 1, frame)
     trackPage(frame.MouseEnter:Connect(function() tween(s, { Color = Theme.StrokeHi }, 0.15) end))
     trackPage(frame.MouseLeave:Connect(function() tween(s, { Color = Theme.Stroke }, 0.15) end))
@@ -2737,7 +2783,10 @@ Pages["Auto Gather"] = function()
         State.LegitMode = v
         Notifications.info("Legit Gather", v and "Enabled" or "Disabled")
     end)
-    sliderRow(c1, "Flight Speed", 166, 20, 250, State.GatherSpeed, " studs/s", function(v) State.GatherSpeed = v end)
+    sliderRow(c1, "Hit Delay", 166, 0.05, 3, State.HitGap, "s", function(v)
+        State.HitGap = v
+        State.LegitHitDelay = math.clamp(v, 0.4, 5)
+    end)
     keybindRow(c1, "Auto Gather Keybind", 224, function() return State.GatherKey end, function(k) State.GatherKey = k end)
 
     sectionTitle("Selection", y); y += 34
@@ -2752,10 +2801,21 @@ Pages["Auto Gather"] = function()
     end)
 
     sectionTitle("Tuning", y); y += 34
-    local cT = card(y, 188); y += 198
-    sliderRow(cT, "Gather Around / Mass Range", 8, 10, 120, State.HitRange, " studs", function(v) State.HitRange = v end)
-    sliderRow(cT, "Legit Reach", 66, 4, 20, State.LegitReach, " studs", function(v) State.LegitReach = v end)
-    sliderRow(cT, "Legit Hit Delay", 124, 0.4, 5, State.LegitHitDelay, "s", function(v) State.LegitHitDelay = v end)
+    local cT = card(y, 220); y += 230
+    new("TextLabel", {
+        Size = UDim2.new(1, -32, 0, 28), Position = UDim2.fromOffset(16, 8),
+        BackgroundTransparency = 1, Font = Theme.Font,
+        Text = "Hit Delay on Modes paces every swing (Auto, Teleport, Gather Around, and Legit). This range is only how far Gather Around reaches.",
+        TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, Parent = cT,
+    })
+    sliderRow(cT, "Gather Around / Mass Range", 40, 10, 120, State.HitRange, " studs", function(v) State.HitRange = v end)
+    sliderRow(cT, "Legit Reach", 98, 4, 20, State.LegitReach, " studs", function(v) State.LegitReach = v end)
+    sliderRow(cT, "Hit Delay (same as Modes)", 156, 0.05, 3, State.HitGap, "s", function(v)
+        State.HitGap = v
+        State.LegitHitDelay = math.clamp(v, 0.4, 5)
+    end)
 
     sectionTitle("Stealth Profile", y); y += 34
     local cS = card(y, 514); y += 524
@@ -3325,7 +3385,7 @@ end
 local ProbeTool = {}
 do
     local bus = Instance.new("BindableFunction")
-    bus.Name = "SamuraiHubProbeBus"
+    bus.Name = "TroyHubProbeBus"
 
     local candidates = {
         "QCAddResources", "Market", "Civilization", "Upgrade",
@@ -3516,11 +3576,11 @@ Pages["UI Settings"] = function()
         { "Aim", "AimKeyCode" },
     }
     local ACCENT_PRESETS = {
-        { "Ice", Color3.fromRGB(125, 220, 255), Color3.fromRGB(167, 139, 250) },
-        { "Ember", Color3.fromRGB(255, 146, 92), Color3.fromRGB(255, 92, 122) },
-        { "Jade", Color3.fromRGB(110, 231, 183), Color3.fromRGB(56, 189, 248) },
-        { "Violet", Color3.fromRGB(196, 141, 255), Color3.fromRGB(129, 140, 248) },
-        { "Mono", Color3.fromRGB(226, 232, 240), Color3.fromRGB(148, 163, 184) },
+        { "Gold", Color3.fromRGB(212, 160, 64), Color3.fromRGB(196, 112, 48) },
+        { "Ember", Color3.fromRGB(232, 120, 64), Color3.fromRGB(180, 64, 48) },
+        { "Sage", Color3.fromRGB(132, 176, 112), Color3.fromRGB(88, 140, 96) },
+        { "Sand", Color3.fromRGB(212, 196, 156), Color3.fromRGB(164, 140, 104) },
+        { "Mono", Color3.fromRGB(220, 220, 216), Color3.fromRGB(140, 140, 136) },
     }
     local function colorToHex(c: Color3): string
         return string.format("%02X%02X%02X",
@@ -3651,10 +3711,10 @@ Pages["UI Settings"] = function()
         end))
     end
 
-    local _, boxA = textboxRow(cTheme, "Accent hex", 76, "7DDCFF", function(txt)
+    local _, boxA = textboxRow(cTheme, "Accent hex", 76, "D4A040", function(txt)
         local c = hexToColor(txt)
         if not c then
-            Notifications.warn("Theme", "Use a 6-digit hex like 7DDCFF")
+            Notifications.warn("Theme", "Use a 6-digit hex like D4A040")
             return
         end
         applyAccents(c, Theme.Accent2)
@@ -3662,10 +3722,10 @@ Pages["UI Settings"] = function()
     hexA = boxA
     hexA.Text = colorToHex(Theme.Accent)
 
-    local _, boxB = textboxRow(cTheme, "Secondary hex", 114, "A78BFA", function(txt)
+    local _, boxB = textboxRow(cTheme, "Secondary hex", 114, "C47030", function(txt)
         local c = hexToColor(txt)
         if not c then
-            Notifications.warn("Theme", "Use a 6-digit hex like A78BFA")
+            Notifications.warn("Theme", "Use a 6-digit hex like C47030")
             return
         end
         applyAccents(Theme.Accent, c)
@@ -3753,7 +3813,7 @@ Pages["UI Settings"] = function()
     sectionTitle("Danger", y); y += 34
     local cDanger = card(y, 56); y += 66
     local unloadBtn = actionButton(cDanger, "Unload Hub", 12, function()
-        Notifications.info("Samurai Hub", "Unloading…")
+        Notifications.info("Troy", "Unloading…")
         CloseAndUnload()
     end)
     unloadBtn.TextColor3 = Theme.Danger
@@ -3771,14 +3831,14 @@ Pages["Dashboard"] = function()
     local hello = new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 22), Position = UDim2.fromOffset(16, 12),
         BackgroundTransparency = 1, Font = Theme.FontBold,
-        Text = "Welcome back, " .. (player.DisplayName or player.Name),
+        Text = "Hi, " .. (player.DisplayName or player.Name),
         TextColor3 = Theme.Text, TextSize = 16,
         TextXAlignment = Enum.TextXAlignment.Left, Parent = cHi,
     })
     local session = new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 36),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Loading session…", TextColor3 = Theme.TextDim, TextSize = 12,
+        Text = "Turn on Auto Gather to farm. Visuals, Combat, and Server are in the left list.", TextColor3 = Theme.TextDim, TextSize = 12,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = cHi,
     })
@@ -3922,18 +3982,18 @@ end
 local sidebarY = 34
 local function addNav(name)
     local btn = new("TextButton", {
-        Size = UDim2.new(1, -20, 0, 34), Position = UDim2.fromOffset(10, sidebarY),
-        BackgroundColor3 = Theme.Glass, BackgroundTransparency = 1,
-        BorderSizePixel = 0, Font = Theme.Font, Text = "   " .. name,
+        Size = UDim2.new(1, -16, 0, 36), Position = UDim2.fromOffset(8, sidebarY),
+        BackgroundColor3 = Theme.GlassHi, BackgroundTransparency = 1,
+        BorderSizePixel = 0, Font = Theme.Font, Text = "    " .. name,
         TextColor3 = Theme.TextDim, TextSize = 13,
         TextXAlignment = Enum.TextXAlignment.Left,
         AutoButtonColor = false, Parent = Sidebar,
     })
     corner(8, btn)
-    sidebarY += 38
+    sidebarY += 40
     local bar = new("Frame", {
-        Name = "AccentBar", Size = UDim2.fromOffset(3, 16),
-        Position = UDim2.fromOffset(2, 9), BackgroundColor3 = Theme.Accent,
+        Name = "AccentBar", Size = UDim2.fromOffset(3, 18),
+        Position = UDim2.fromOffset(0, 9), BackgroundColor3 = Theme.Accent,
         BorderSizePixel = 0, Visible = false, Parent = btn,
     })
     corner(2, bar)
@@ -4005,7 +4065,7 @@ do
         -- Its own ScreenGui: minimising the hub sets ScreenGui.Enabled = false,
         -- which would take the only way back with it.
         local gui = new("ScreenGui", {
-            Name = "SamuraiHubTouch", ResetOnSpawn = false,
+            Name = "TroyHubTouch", ResetOnSpawn = false,
             IgnoreGuiInset = true, DisplayOrder = 998, Parent = playerGui,
         })
         touchGui = gui
@@ -4013,7 +4073,7 @@ do
             Name = "Toggle", Size = UDim2.fromOffset(52, 52),
             Position = UDim2.new(0, 16, 0.5, -26),
             BackgroundColor3 = Theme.Glass, BorderSizePixel = 0,
-            Font = Theme.FontBlack, Text = "S", TextColor3 = Theme.Accent,
+            Font = Theme.FontBlack, Text = "T", TextColor3 = Theme.Accent,
             TextSize = 22, AutoButtonColor = false, Parent = gui,
         })
         corner(26, btn)
@@ -4226,7 +4286,7 @@ navigateTo("Auto Gather")
 local ESP = {}
 do
     local espGui = new("ScreenGui", {
-        Name = "SamuraiHubESP", ResetOnSpawn = false, IgnoreGuiInset = true,
+        Name = "TroyHubESP", ResetOnSpawn = false, IgnoreGuiInset = true,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 998,
         Parent = playerGui,
     })
@@ -4299,7 +4359,7 @@ do
     -- Hidden-but-kept window for a target that just left range or lost the
     -- on-view sort. Long enough to absorb flicker, short enough that walking
     -- away really does release the drawing.
-    local ESP_GRACE = 0.75
+    local ESP_GRACE = 0.8
     local graceUntil = {}
 
     local function makeDrawing(color)
@@ -4529,7 +4589,7 @@ end
 -- ============================================================
 do
     local fovGui = new("ScreenGui", {
-        Name = "SamuraiHubFOV", ResetOnSpawn = false, IgnoreGuiInset = true,
+        Name = "TroyHubFOV", ResetOnSpawn = false, IgnoreGuiInset = true,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling, DisplayOrder = 997,
         Parent = playerGui,
     })
@@ -4913,11 +4973,10 @@ local Pin = { since = 0, restUntil = 0, drifted = 0 }
 
 local function pinAllowed(): boolean
     if State.UsePin ~= true then return false end
+    -- Never drop the pin mid-cluster. High ping plus an unanchored CFrame hold
+    -- is exactly the slide-off you already solved with the pin.
+    if Farm.mining and movementLocked then return true end
     local now = os.clock()
-    -- Drift override: the rest window exists to break up the anchor signature,
-    -- not to let the character walk off the node. If unanchored position
-    -- holding is losing (high ping, server correction, a shove), take the pin
-    -- back immediately and eat the visibility cost.
     if now < Pin.drifted then return true end
     if now < Pin.restUntil then return false end
     local cap = clampNum(State.PinMax, 0, 600, 6)
@@ -4932,7 +4991,7 @@ end
 -- Called from pinAt each swing pass. Two consecutive passes where the CFrame
 -- write failed to hold means the unanchored path is not working here.
 local function notePinDrift(distance: number)
-    if distance > 5 then
+    if distance > 2.5 then
         Pin.drifted = os.clock() + 2.5
     end
 end
@@ -4979,7 +5038,7 @@ end)
 -- swings. A 0.12s HIT_GAP is long enough to slide off on high ping; this
 -- job is the unanchored hold. If even this loses, notePinDrift re-takes
 -- the actual pin for 2.5s.
-Scheduler.add("pinhold", "logic", 0.03, function()
+Scheduler.add("pinhold", "logic", 0, function()
     if Unloading or not Farm.mining then return end
     local dest, look = Farm.dest, Farm.look
     if not dest or not look then return end
@@ -5324,10 +5383,10 @@ end
 -- ============================================================
 local SNAP_OFF = 3.5
 local STAND_HIP = 3
--- Pace between swing passes. Driven by the stealth profile, with a little
--- jitter so the fire pattern is not a metronome.
+-- Pace between every FireServer, not just between drain passes. Gather Around
+-- used to ignore this entirely and dump a cluster at FireFloor (0.03s).
 local function hitGap(): number
-    return clampNum(State.HitGap, 0.05, 2, 0.12) + math.random() * 0.03
+    return clampNum(State.HitGap, 0.05, 3, 0.12)
 end
 local SWINGS = 2
 local DWELL_MAX = 22
@@ -5432,9 +5491,9 @@ local function fireGather(inst: Instance): boolean
     -- Spread bursts with a little jitter instead of dumping a whole cluster
     -- into one frame.
     local gap = os.clock() - lastFireAt
-    local floor = fireFloor()
+    local floor = math.max(fireFloor(), hitGap())
     if gap < floor then
-        task.wait(floor - gap + math.random() * 0.02)
+        task.wait(floor - gap + math.random() * math.min(0.04, floor * 0.15))
     end
     lastFireAt = os.clock()
     local target = folderChild(inst) or inst
@@ -5609,9 +5668,9 @@ local function pinAt(obj: Instance?, treePos: Vector3)
     end
     if pinAllowed() then
         if not root.Anchored then lockMovement() end
-    elseif movementLocked then
-        -- Pin budget spent. Release the anchor; the CFrame write below still
-        -- holds the node because this runs every swing pass.
+    elseif movementLocked and not Farm.mining then
+        -- Rest only between nodes. Releasing mid-drain is how high ping
+        -- slides you off the trunk.
         unlockMovement()
         local again = getRoot()
         if not again then return end
@@ -5693,7 +5752,9 @@ local function drainUntilGone(radius: number, inst: Instance?, pos: Vector3?, ke
             string.format("%s\n%s  ·  mining until gone", label, name),
             Theme.Success
         )
-        task.wait(hitGap())
+        -- fireGather already waited Hit Delay per swing. Yield so Unload and
+        -- keepGoing can run; do not wait Hit Delay a second time.
+        task.wait()
     end
     Farm.mining = false
     return fired
@@ -5840,8 +5901,8 @@ local function farmPass()
                 task.wait(0.2 + math.random() * 0.5)
             end
         end
-        local delay = clampNum(State.LegitHitDelay, 0.4, 5, 1.2)
-        task.wait(math.max(delay, 0.3) + math.random() * 0.4)
+        local delay = hitGap()
+        task.wait(math.max(delay, 0.05) + math.random() * 0.08)
         doAutoSell()
         return
     end
@@ -5956,5 +6017,5 @@ task.defer(function()
         if not Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("v1.9.5 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("v1.9.7 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
