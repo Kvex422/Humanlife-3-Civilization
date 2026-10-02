@@ -1,481 +1,1773 @@
-local Players            = game:GetService("Players")
-local UserInputService   = game:GetService("UserInputService")
-local RunService         = game:GetService("RunService")
-local TweenService       = game:GetService("TweenService")
-local ReplicatedStorage  = game:GetService("ReplicatedStorage")
-local Lighting           = game:GetService("Lighting")
-local TeleportService    = game:GetService("TeleportService")
-local Stats              = game:GetService("Stats")
-local HttpService        = game:GetService("HttpService")
-local GuiService         = game:GetService("GuiService")
-local ProximityPromptService = game:GetService("ProximityPromptService")
-
-local player = Players.LocalPlayer
-if not player then
-    Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
-    player = Players.LocalPlayer
-end
-local playerGui = player:WaitForChild("PlayerGui")
-
-local function isHubInstance(name: string): boolean
-    return name == "TroyHub" or name == "TroyHubESP"
-        or name == "TroyHubFOV" or name == "TroyHubKill"
-        or name == "TroyHubTouch"
-        or name == "SamuraiHub" or name == "SamuraiHubESP"
-        or name == "SamuraiHubFOV" or name == "SamuraiHubKill"
-        or name == "SamuraiHubTouch"
-end
-
--- Stop a previous inject before this copy builds a GUI. Destroying the
--- old ScreenGui alone leaves its Heartbeat / input / farm loops running.
-pcall(function()
-    local prev = rawget(_G, "TroyHubUnload") or rawget(_G, "SamuraiHubUnload")
-    if typeof(prev) == "function" then
-        prev()
+--!strict
+-- TroyHub 2.0.0 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.
+local function __troyDefPack()
+    local pack = {}
+    local function def(name, factory)
+        pack[name] = factory
     end
-end)
-for _, g in playerGui:GetChildren() do
-    if isHubInstance(g.Name) then
-        pcall(function() g:Destroy() end)
-    end
-end
-
--- ============================================================
---  THEME
--- ============================================================
-local Theme = {
-    Bg         = Color3.fromRGB(16, 16, 16),
-    Glass      = Color3.fromRGB(26, 26, 26),
-    GlassHi    = Color3.fromRGB(36, 36, 36),
-    Stroke     = Color3.fromRGB(48, 48, 48),
-    StrokeHi   = Color3.fromRGB(196, 148, 64),
-    Accent     = Color3.fromRGB(212, 160, 64),
-    Accent2    = Color3.fromRGB(196, 112, 48),
-    Success    = Color3.fromRGB(92, 196, 128),
-    Warn       = Color3.fromRGB(232, 176, 72),
-    Danger     = Color3.fromRGB(224, 88, 88),
-    Text       = Color3.fromRGB(240, 238, 232),
-    TextDim    = Color3.fromRGB(160, 156, 148),
-    TextFaint  = Color3.fromRGB(104, 100, 94),
-    TrackOff   = Color3.fromRGB(48, 48, 48),
-    Font       = Enum.Font.Gotham,
-    FontBold   = Enum.Font.GothamMedium,
-    FontBlack  = Enum.Font.GothamBold,
-}
-
--- ============================================================
---  CONNECTION TRACKER
--- ============================================================
-local Unloading = false
-local Connections = {}
-local function track(conn) table.insert(Connections, conn); return conn end
-local function disconnectAll()
-    for _, c in Connections do pcall(function() c:Disconnect() end) end
-    table.clear(Connections)
-end
-
-local pageConnections = {}
-local pageDebris = {}
--- Assigned once the Scheduler exists; lets page-scoped jobs be dropped by the
--- same call that drops page connections and debris.
-local PageJobs: (() -> ())? = nil
-local function trackPage(conn) table.insert(pageConnections, conn); return conn end
-local function holdDebris(inst) table.insert(pageDebris, inst); return inst end
-local function clearPageScope()
-    for _, c in pageConnections do pcall(function() c:Disconnect() end) end
-    table.clear(pageConnections)
-    for _, inst in pageDebris do pcall(function() inst:Destroy() end) end
-    table.clear(pageDebris)
-    if PageJobs then PageJobs() end
-end
-
--- ============================================================
---  HELPERS
--- ============================================================
-local function new(class, props, children)
-    local inst = Instance.new(class)
-    -- TextButtons are Selectable by default. Clicking one sets
-    -- GuiService.SelectedObject, and every later key (E, job holds, etc.)
-    -- arrives as GameProcessed — ProximityPrompts and class binds ignore it.
-    if inst:IsA("GuiButton") and props.Selectable == nil then
-        inst.Selectable = false
-    end
-    local parent = props.Parent
-    for k, v in props do
-        if k ~= "Parent" then inst[k] = v end
-    end
-    if children then
-        for _, c in children do c.Parent = inst end
-    end
-    if parent ~= nil then inst.Parent = parent end
-    return inst
-end
-
-local function corner(r, parent) return new("UICorner", { CornerRadius = UDim.new(0, r), Parent = parent }) end
-local function stroke(color, thickness, parent)
-    return new("UIStroke", {
-        Color = color or Theme.Stroke, Thickness = thickness or 1,
-        ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Parent = parent,
-    })
-end
-local function pad(px, parent)
-    return new("UIPadding", {
-        PaddingTop = UDim.new(0, px), PaddingBottom = UDim.new(0, px),
-        PaddingLeft = UDim.new(0, px), PaddingRight = UDim.new(0, px), Parent = parent,
-    })
-end
-local function gradient(c1, c2, rotation, parent)
-    return new("UIGradient", { Color = ColorSequence.new(c1, c2), Rotation = rotation or 0, Parent = parent })
-end
-local function tween(inst, props, time, style, dir)
-    local t = TweenService:Create(inst, TweenInfo.new(
-        time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out), props)
-    t:Play()
-    return t
-end
-local function isPointerBegin(input)
-    return input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch
-end
-local function isPointerMove(input)
-    return input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch
-end
-local function isKeyDown(key: Enum.KeyCode): boolean
-    local ok, down = pcall(function() return UserInputService:IsKeyDown(key) end)
-    return ok and down or false
-end
-
-local function inputMatches(input, bind): boolean
-    if typeof(bind) ~= "EnumItem" then return false end
-    if bind.EnumType == Enum.UserInputType then
-        return input.UserInputType == bind
-    end
-    return bind ~= Enum.KeyCode.Unknown and input.KeyCode == bind
-end
-
-local FrameRate = { fps = 60 }
-
-local function getPingMs(): number
-    local ms = 0
-    local ok = pcall(function()
-        ms = math.floor((player:GetNetworkPing() or 0) * 1000 + 0.5)
-    end)
-    if ok and ms > 0 then return ms end
-    pcall(function()
-        local item = Stats.Network.ServerStatsItem["Data Ping"]
-        if item then ms = math.floor(item:GetValue() + 0.5) end
-    end)
-    return ms
-end
-
--- ============================================================
---  STATE
--- ============================================================
-local RESOURCE_NAMES = {
-    ["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
-    ["Rock"] = true, ["Sand"] = true, ["Clay"] = true, ["Coal"] = true,
-    ["Copper"] = true, ["Gold"] = true, ["Iron"] = true, ["Tin"] = true,
-    ["Sulfur"] = true,
-}
-
-local RESOURCE_LIST = {
-    "Tree", "Cherry Tree", "Rubber Tree", "Rock", "Sand",
-    "Clay", "Coal", "Copper", "Gold", "Iron", "Tin", "Sulfur",
-}
-
-local SELL_STYLES = { "name_amount", "name_only", "amount_only", "all_name", "action_name" }
-
-local function fireSell(market, style: string, resourceName: string): boolean
-    if style == "name_amount" then
-        market:FireServer(resourceName, 1)
-    elseif style == "name_only" then
-        market:FireServer(resourceName)
-    elseif style == "amount_only" then
-        market:FireServer(1)
-    elseif style == "all_name" then
-        market:FireServer(resourceName, "all")
-    elseif style == "action_name" then
-        market:FireServer("sell", resourceName, 1)
-    else
-        return false
-    end
-    return true
-end
-
-local State = {
-    AutoGather         = false,
-    TeleportGather     = false,
-    GatherAround       = false,
-    LegitMode          = false,
-    GatherSpeed        = 80,
-    HitRange           = 45,
-    LegitReach         = 8,
-    LegitHitDelay      = 1.2,
-    ResourcesToCollect = {
-        ["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
-        ["Rock"] = true, ["Sand"] = false, ["Clay"] = false,
-        ["Coal"] = false, ["Copper"] = false, ["Gold"] = false,
-        ["Iron"] = false, ["Tin"] = false, ["Sulfur"] = false,
-    },
-    StatusEnabled      = true,
-
-    AutoSell           = false,
-    SellArgStyle       = "name_amount",
-
-    PlayerESP          = false,
-    PlayerBox          = true,
-    PlayerName         = true,
-    PlayerDistance     = true,
-    PlayerHealth       = true,
-    PlayerHealthText   = false,
-    PlayerMaxDist      = 700,
-
-    ResourceESP        = false,
-    ResourceBox        = true,
-    ResourceName       = true,
-    ResourceDistance   = true,
-    ResourceMaxDist    = 500,
-    ResourceLimit      = 80,
-    ResourceTypeFilter = {
-        ["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
-        ["Rock"] = true, ["Sand"] = false, ["Clay"] = false,
-        ["Coal"] = false, ["Copper"] = false, ["Gold"] = false,
-        ["Iron"] = false, ["Tin"] = false, ["Sulfur"] = false,
-    },
-    -- Higher wins. Weighted against distance when picking the next node, so a
-    -- gold vein 200 studs away can still beat a tree at your feet.
-    ResourcePriority = {
-        ["Gold"] = 9, ["Sulfur"] = 8, ["Iron"] = 7, ["Copper"] = 6,
-        ["Coal"] = 5, ["Tin"] = 5, ["Clay"] = 3, ["Sand"] = 3,
-        ["Rock"] = 2, ["Cherry Tree"] = 2, ["Rubber Tree"] = 2, ["Tree"] = 1,
-    },
-    PriorityWeight     = 40,
-
-    Fullbright         = false,
-    NoShadows          = false,
-    XRay               = false,
-
-    FOV                = 70,
-    CamZoom            = 128,
-
-    AntiAFK            = true,
-    InfiniteJump       = false,
-    InfJumpKey         = Enum.KeyCode.V,
-    Fly                = false,
-    FlyKey             = Enum.KeyCode.F,
-    FlySpeed           = 100,
-    Noclip             = false,
-    NoclipKey          = Enum.KeyCode.N,
-
-    EnableWalkSpeed    = false,
-    WalkSpeed          = 40,
-    WalkSpeedMethod    = "Normal",
-    JumpPower          = 50,
-    Gravity            = workspace.Gravity,
-    MenuKey            = Enum.KeyCode.RightShift,
-    GatherKey          = Enum.KeyCode.G,
-    PanicKey           = Enum.KeyCode.End,
-
-    -- Stealth / movement profile
-    StealthProfile     = "Balanced",
-    SoftTeleport       = false,
-    SoftTeleportSpeed  = 220,
-    UsePin             = true,
-    PinMax             = 6,
-    VelocityClamp      = false,
-    MaxVelocity        = 160,
-    LandingJitter      = true,
-    TravelHops         = false,
-    HopDistance        = 180,
-    HitGap             = 0.12,
-    FireFloor          = 0.03,
-    LandSpread         = 1.4,
-    SkipSeconds        = 8,
-    ClusterRadius      = 90,
-    ClusterSeconds     = 60,
-
-    AutoRejoin         = false,
-
-    -- UI
-    UIScale            = 1,
-    AutoUIScale        = true,
-    TouchButton        = true,
-    ThemeAccent        = Color3.fromRGB(212, 160, 64),
-    ThemeAccent2       = Color3.fromRGB(196, 112, 48),
-
-    AimboT             = false,
-    AimKey             = "Hold",
-    AimKeyCode         = Enum.UserInputType.MouseButton2,
-    AimPart            = "Head",
-    Smoothness         = 0,
-    AimMaxDist         = 300,
-    FOVCheck           = true,
-    FOVRadius          = 120,
-    WallCheck          = true,
-    AliveCheck         = true,
-    TeamCheck          = false,
-    FriendCheck        = false,
-    ShowFOVCircle      = true,
-    FOVColor           = Color3.fromRGB(212, 160, 64),
-    FOVFollowMouse     = false,
-    TargetIndicator    = false,
-    AimPrediction      = false,
-    AimPredictStrength = 12,
-    AimCurve           = "Ease",
-
-    _statusLabel       = nil,
-    _statusDot         = nil,
-    _debugLabel        = nil,
-    _debugLog          = {},
-    _rescanScheduled   = false,
-}
-
--- Guards against NaN / nil / wild values reaching range math, which would
--- otherwise make every distance comparison false and stall a feature.
-local function clampNum(v: any, min: number, max: number, fallback: number): number
-    if type(v) ~= "number" or v ~= v then return fallback end
-    return math.clamp(v, min, max)
-end
-
-local function log(line)
-    table.insert(State._debugLog, 1, line)
-    while #State._debugLog > 8 do table.remove(State._debugLog) end
-    local label = State._debugLabel
-    if label and label.Parent then label.Text = table.concat(State._debugLog, "\n") end
-    print("[Troy]", line)
-end
-
--- ============================================================
---  SCHEDULER
---  Every always-on job runs from exactly two root connections, each job
---  throttled to the rate it actually needs. This replaces a dozen loose
---  Heartbeat / RenderStepped connections that all fired every frame, and it
---  means a job that starts erroring gets isolated instead of spamming.
--- ============================================================
-local Scheduler = {}
-do
-    local phases = { render = {}, logic = {} }
-
-    local function runPhase(phaseName: string, dt: number)
-        if Unloading then return end
-        local now = os.clock()
-        local list = phases[phaseName]
-        for name, job in list do
-            if job.interval <= 0 or (now - job.last) >= job.interval then
-                job.last = now
-                local ok, err = pcall(job.fn, dt)
-                if not ok then
-                    job.errors += 1
-                    if job.errors <= 2 then
-                        log("Task '" .. name .. "' error: " .. tostring(err))
-                    end
-                    if job.errors >= 30 then
-                        list[name] = nil
-                        log("Task '" .. name .. "' disabled after repeated errors")
-                    end
-                end
-            end
+    local function import(name)
+        local factory = pack[name]
+        if type(factory) ~= "function" then
+            error("TroyHub missing module " .. tostring(name))
         end
+        return factory()
     end
 
-    -- interval 0 means every frame; use it only for dt-dependent work.
-    function Scheduler.add(name: string, phaseName: string, interval: number, fn)
-        phases[phaseName][name] = { fn = fn, interval = interval, last = 0, errors = 0 }
-    end
+    def("utils", function()
+-- Shared helpers. Everything here is pure or service-light so feature modules
+-- can call it without pulling GUI or farm code.
 
-    function Scheduler.remove(name: string)
-        phases.render[name] = nil
-        phases.logic[name] = nil
-    end
+return function(Hub: any)
+	local TweenService = Hub.Services.TweenService
+	local UserInputService = Hub.Services.UserInputService
+	local Stats = Hub.Services.Stats
+	local player = Hub.player
 
-    -- Page jobs are namespaced so a tab switch can drop all of them at once,
-    -- even if several tabs were opened in quick succession.
-    function Scheduler.removePages()
-        for _, list in phases do
-            for name in list do
-                if string.sub(name, 1, 5) == "page:" then
-                    list[name] = nil
-                end
-            end
-        end
-    end
+	local function clampNum(v: any, min: number, max: number, fallback: number): number
+		if type(v) ~= "number" or v ~= v then
+			return fallback
+		end
+		return math.clamp(v, min, max)
+	end
 
-    function Scheduler.clear()
-        table.clear(phases.render)
-        table.clear(phases.logic)
-    end
+	local function new(class: string, props: any, children: any?)
+		local inst = Instance.new(class)
+		if inst:IsA("GuiButton") and props.Selectable == nil then
+			inst.Selectable = false
+		end
+		local parent = props.Parent
+		for k, v in props do
+			if k ~= "Parent" then
+				inst[k] = v
+			end
+		end
+		if children then
+			for _, c in children do
+				c.Parent = inst
+			end
+		end
+		if parent ~= nil then
+			inst.Parent = parent
+		end
+		return inst
+	end
 
-    function Scheduler.start()
-        track(RunService.RenderStepped:Connect(function(dt) runPhase("render", dt) end))
-        track(RunService.Heartbeat:Connect(function(dt) runPhase("logic", dt) end))
-    end
+	local function corner(r, parent)
+		return new("UICorner", { CornerRadius = UDim.new(0, r), Parent = parent })
+	end
+
+	local function stroke(color, thickness, parent)
+		return new("UIStroke", {
+			Color = color or Hub.Theme.Stroke,
+			Thickness = thickness or 1,
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			Parent = parent,
+		})
+	end
+
+	local function pad(px, parent)
+		return new("UIPadding", {
+			PaddingTop = UDim.new(0, px),
+			PaddingBottom = UDim.new(0, px),
+			PaddingLeft = UDim.new(0, px),
+			PaddingRight = UDim.new(0, px),
+			Parent = parent,
+		})
+	end
+
+	local function gradient(c1, c2, rotation, parent)
+		return new("UIGradient", {
+			Color = ColorSequence.new(c1, c2),
+			Rotation = rotation or 0,
+			Parent = parent,
+		})
+	end
+
+	local function tween(inst, props, time, style, dir)
+		local t = TweenService:Create(
+			inst,
+			TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
+			props
+		)
+		t:Play()
+		return t
+	end
+
+	local function isPointerBegin(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	local function isPointerMove(input)
+		return input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	local function isKeyDown(key: Enum.KeyCode): boolean
+		local ok, down = pcall(function()
+			return UserInputService:IsKeyDown(key)
+		end)
+		return ok and down or false
+	end
+
+	local function inputMatches(input, bind): boolean
+		if typeof(bind) ~= "EnumItem" then
+			return false
+		end
+		if bind.EnumType == Enum.UserInputType then
+			return input.UserInputType == bind
+		end
+		return bind ~= Enum.KeyCode.Unknown and input.KeyCode == bind
+	end
+
+	local function getPingMs(): number
+		local ms = 0
+		local ok = pcall(function()
+			ms = math.floor((player:GetNetworkPing() or 0) * 1000 + 0.5)
+		end)
+		if ok and ms > 0 then
+			return ms
+		end
+		pcall(function()
+			local item = Stats.Network.ServerStatsItem["Data Ping"]
+			if item then
+				ms = math.floor(item:GetValue() + 0.5)
+			end
+		end)
+		return ms
+	end
+
+	local function getCharacter(): Model?
+		return player.Character
+	end
+
+	local function getHumanoid(): Humanoid?
+		local char = player.Character
+		if not char then
+			return nil
+		end
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum and hum:IsA("Humanoid") then
+			return hum
+		end
+		return nil
+	end
+
+	local function getRoot(): BasePart?
+		local char = player.Character
+		if not char then
+			return nil
+		end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			return root
+		end
+		return nil
+	end
+
+	Hub.clampNum = clampNum
+	Hub.new = new
+	Hub.corner = corner
+	Hub.stroke = stroke
+	Hub.pad = pad
+	Hub.gradient = gradient
+	Hub.tween = tween
+	Hub.isPointerBegin = isPointerBegin
+	Hub.isPointerMove = isPointerMove
+	Hub.isKeyDown = isKeyDown
+	Hub.inputMatches = inputMatches
+	Hub.getPingMs = getPingMs
+	Hub.getCharacter = getCharacter
+	Hub.getHumanoid = getHumanoid
+	Hub.getRoot = getRoot
+	Hub.FrameRate = Hub.FrameRate or { fps = 60 }
+	return Hub
 end
+    end)
 
-Scheduler.start()
-PageJobs = Scheduler.removePages
+    def("logger", function()
+-- Leveled logger. Debug stays quiet unless State.DebugMode is on.
+-- Errors also land in Hub.Diagnostics.LastError for the debug panel.
 
-Scheduler.add("framerate", "render", 0, function(dt)
-    if dt > 0 then FrameRate.fps = FrameRate.fps * 0.9 + (1 / dt) * 0.1 end
-end)
+return function(Hub: any)
+	local LEVEL = {
+		debug = 10,
+		info = 20,
+		warn = 30,
+		error = 40,
+		fatal = 50,
+	}
 
--- ============================================================
---  FARM STATISTICS
--- ============================================================
-local FarmStats = {
-    runSeconds = 0,
-    nodes = 0,
-    swings = 0,
-    byKind = {} :: { [string]: number },
-}
+	local Logger = {
+		LEVEL = LEVEL,
+		minLevel = LEVEL.info,
+	}
 
-function FarmStats.reset()
-    FarmStats.runSeconds = 0
-    FarmStats.nodes = 0
-    FarmStats.swings = 0
-    table.clear(FarmStats.byKind)
+	local function emit(levelName: string, line: string)
+		local State = Hub.State
+		if not State then
+			print("[Troy]", line)
+			return
+		end
+		local level = LEVEL[levelName] or LEVEL.info
+		if levelName == "debug" and not State.DebugMode then
+			return
+		end
+		if level < Logger.minLevel and not State.DebugMode then
+			return
+		end
+
+		table.insert(State._debugLog, 1, line)
+		while #State._debugLog > 12 do
+			table.remove(State._debugLog)
+		end
+		local label = State._debugLabel
+		if label and label.Parent then
+			label.Text = table.concat(State._debugLog, "\n")
+		end
+
+		local prefix = "[Troy]"
+		if levelName == "warn" then
+			prefix = "[Troy][warn]"
+		elseif levelName == "error" or levelName == "fatal" then
+			prefix = "[Troy][error]"
+		elseif levelName == "debug" then
+			prefix = "[Troy][debug]"
+		end
+		print(prefix, line)
+
+		if level >= LEVEL.error then
+			Hub.Diagnostics = Hub.Diagnostics or {}
+			Hub.Diagnostics.LastError = line
+			Hub.Diagnostics.LastErrorAt = os.clock()
+			local Notifications = Hub.Notifications
+			if Notifications and Notifications.error then
+				pcall(function()
+					Notifications.error("Error", line, 5)
+				end)
+			end
+		elseif level >= LEVEL.warn then
+			Hub.Diagnostics = Hub.Diagnostics or {}
+			Hub.Diagnostics.LastWarn = line
+		end
+	end
+
+	function Logger.debug(line: string)
+		emit("debug", line)
+	end
+	function Logger.info(line: string)
+		emit("info", line)
+	end
+	function Logger.warn(line: string)
+		emit("warn", line)
+	end
+	function Logger.error(line: string)
+		emit("error", line)
+	end
+	function Logger.fatal(line: string)
+		emit("fatal", line)
+	end
+
+	-- Compatibility with the original log() helper.
+	local function log(line: string)
+		Logger.info(line)
+	end
+
+	Hub.Logger = Logger
+	Hub.log = log
+	return Hub
 end
+    end)
 
-function FarmStats.noteSwing()
-    FarmStats.swings += 1
-end
+    def("data", function()
+-- Static game data, farm session stats, versioning, and changelog.
 
-function FarmStats.noteNode(kind: string?)
-    FarmStats.nodes += 1
-    if kind then
-        FarmStats.byKind[kind] = (FarmStats.byKind[kind] or 0) + 1
-    end
-end
+return function(Hub: any)
+	local Version = {
+		script = "2.0.0",
+		configSchema = 2,
+		builtAt = "2026-10-02",
+		compat = { "Humanlife 3: Civilization" },
+		changelog = {
+			"2.0.0  Modular split, feature registry, injection guard, Unload pipeline.",
+			"1.9.7  Troy rebrand, gold theme, stronger Fullbright, HitGap on every fire.",
+			"1.9.6  Hit Delay wired into fireGather for all gather modes.",
+		},
+	}
 
-function FarmStats.perMinute(): number
-    if FarmStats.runSeconds < 1 then return 0 end
-    return FarmStats.nodes / (FarmStats.runSeconds / 60)
-end
+	local RESOURCE_NAMES = {
+		["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
+		["Rock"] = true, ["Sand"] = true, ["Clay"] = true, ["Coal"] = true,
+		["Copper"] = true, ["Gold"] = true, ["Iron"] = true, ["Tin"] = true,
+		["Sulfur"] = true,
+	}
 
-function FarmStats.clock(): string
-    local total = math.floor(FarmStats.runSeconds)
-    return string.format("%02d:%02d:%02d",
-        math.floor(total / 3600), math.floor(total % 3600 / 60), total % 60)
-end
+	local RESOURCE_LIST = {
+		"Tree", "Cherry Tree", "Rubber Tree", "Rock", "Sand",
+		"Clay", "Coal", "Copper", "Gold", "Iron", "Tin", "Sulfur",
+	}
 
-function FarmStats.topKinds(limit: number): string
-    local rows = {}
-    for kind, n in FarmStats.byKind do
-        table.insert(rows, { kind = kind, n = n })
-    end
-    table.sort(rows, function(a, b) return a.n > b.n end)
-    local parts = {}
-    for i = 1, math.min(#rows, limit) do
-        table.insert(parts, string.format("%s x%d", rows[i].kind, rows[i].n))
-    end
-    if #parts == 0 then return "nothing yet" end
-    return table.concat(parts, "  ·  ")
+	local SELL_STYLES = { "name_amount", "name_only", "amount_only", "all_name", "action_name" }
+
+	local function fireSell(market, style: string, resourceName: string): boolean
+		if style == "name_amount" then
+			market:FireServer(resourceName, 1)
+		elseif style == "name_only" then
+			market:FireServer(resourceName)
+		elseif style == "amount_only" then
+			market:FireServer(1)
+		elseif style == "all_name" then
+			market:FireServer(resourceName, "all")
+		elseif style == "action_name" then
+			market:FireServer("sell", resourceName, 1)
+		else
+			return false
+		end
+		return true
+	end
+
+	local FarmStats = {
+		runSeconds = 0,
+		nodes = 0,
+		swings = 0,
+		byKind = {} :: { [string]: number },
+		startedAt = os.clock(),
+		lastResetAt = os.clock(),
+		bestCluster = 0,
+		lastKind = "",
+	}
+
+	function FarmStats.reset()
+		FarmStats.runSeconds = 0
+		FarmStats.nodes = 0
+		FarmStats.swings = 0
+		table.clear(FarmStats.byKind)
+		FarmStats.lastResetAt = os.clock()
+		FarmStats.bestCluster = 0
+		FarmStats.lastKind = ""
+	end
+
+	function FarmStats.nodesPerMinute(): number
+		local secs = math.max(FarmStats.runSeconds, 1)
+		return (FarmStats.nodes / secs) * 60
+	end
+
+	function FarmStats.avgSwings(): number
+		if FarmStats.nodes <= 0 then
+			return 0
+		end
+		return FarmStats.swings / FarmStats.nodes
+	end
+
+	function FarmStats.topKind(): string
+		local best, n = "", 0
+		for kind, count in FarmStats.byKind do
+			if count > n then
+				best = kind
+				n = count
+			end
+		end
+		return best
+	end
+
+	function FarmStats.noteSwing()
+		FarmStats.swings += 1
+	end
+
+	function FarmStats.noteNode(kind: string?)
+		FarmStats.nodes += 1
+		if kind then
+			FarmStats.byKind[kind] = (FarmStats.byKind[kind] or 0) + 1
+			FarmStats.lastKind = kind
+		end
+	end
+
+	function FarmStats.perMinute(): number
+		return FarmStats.nodesPerMinute()
+	end
+
+	function FarmStats.clock(): string
+		local total = math.floor(FarmStats.runSeconds)
+		return string.format("%02d:%02d:%02d",
+			math.floor(total / 3600), math.floor(total % 3600 / 60), total % 60)
+	end
+
+	function FarmStats.topKinds(limit: number): string
+		local rows = {}
+		for kind, n in FarmStats.byKind do
+			table.insert(rows, { kind = kind, n = n })
+		end
+		table.sort(rows, function(a, b)
+			return a.n > b.n
+		end)
+		local parts = {}
+		for i = 1, math.min(#rows, limit) do
+			table.insert(parts, string.format("%s x%d", rows[i].kind, rows[i].n))
+		end
+		if #parts == 0 then
+			return "nothing yet"
+		end
+		return table.concat(parts, "  ·  ")
+	end
+
+	Hub.Version = Version
+	Hub.RESOURCE_NAMES = RESOURCE_NAMES
+	Hub.RESOURCE_LIST = RESOURCE_LIST
+	Hub.SELL_STYLES = SELL_STYLES
+	Hub.fireSell = fireSell
+	Hub.FarmStats = FarmStats
+	Hub.Data = {
+		RESOURCE_NAMES = RESOURCE_NAMES,
+		RESOURCE_LIST = RESOURCE_LIST,
+		SELL_STYLES = SELL_STYLES,
+		fireSell = fireSell,
+		FarmStats = FarmStats,
+		Version = Version,
+	}
+	return Hub
 end
+    end)
+
+    def("state", function()
+-- Typed defaults, clamp/validation, nil-safe get, freeze-after-init for ConfigDefaults.
+
+return function(Hub: any)
+	local player = Hub.player
+	local Lighting = Hub.Services.Lighting
+	local clampNum = Hub.clampNum
+
+	local ConfigDefaults = {
+		AutoGather = false,
+		TeleportGather = false,
+		GatherAround = false,
+		LegitMode = false,
+		GatherSpeed = 80,
+		HitRange = 45,
+		LegitReach = 8,
+		LegitHitDelay = 1.2,
+		StatusEnabled = true,
+		AutoSell = false,
+		SellArgStyle = "name_amount",
+		PlayerESP = false,
+		PlayerBox = true,
+		PlayerName = true,
+		PlayerDistance = true,
+		PlayerHealth = true,
+		PlayerHealthText = false,
+		PlayerMaxDist = 700,
+		ResourceESP = false,
+		ResourceBox = true,
+		ResourceName = true,
+		ResourceDistance = true,
+		ResourceMaxDist = 500,
+		ResourceLimit = 80,
+		PriorityWeight = 40,
+		Fullbright = false,
+		NoShadows = false,
+		XRay = false,
+		FOV = 70,
+		CamZoom = 128,
+		AntiAFK = true,
+		InfiniteJump = false,
+		Fly = false,
+		FlySpeed = 100,
+		Noclip = false,
+		EnableWalkSpeed = false,
+		WalkSpeed = 40,
+		WalkSpeedMethod = "Normal",
+		JumpPower = 50,
+		StealthProfile = "Balanced",
+		SoftTeleport = false,
+		SoftTeleportSpeed = 220,
+		UsePin = true,
+		PinMax = 6,
+		VelocityClamp = false,
+		MaxVelocity = 160,
+		LandingJitter = true,
+		TravelHops = false,
+		HopDistance = 180,
+		HitGap = 0.12,
+		FireFloor = 0.03,
+		LandSpread = 1.4,
+		SkipSeconds = 8,
+		ClusterRadius = 90,
+		ClusterSeconds = 60,
+		AutoRejoin = false,
+		UIScale = 1,
+		AutoUIScale = true,
+		TouchButton = true,
+		AimboT = false,
+		AimKey = "Hold",
+		AimPart = "Head",
+		Smoothness = 0,
+		AimMaxDist = 300,
+		FOVCheck = true,
+		FOVRadius = 120,
+		WallCheck = true,
+		AliveCheck = true,
+		TeamCheck = false,
+		FriendCheck = false,
+		ShowFOVCircle = true,
+		FOVFollowMouse = false,
+		TargetIndicator = false,
+		AimPrediction = false,
+		AimPredictStrength = 12,
+		AimCurve = "Ease",
+		DebugMode = false,
+		SafeMode = false,
+		UIGlow = true,
+		UITransparency = 0,
+		ThemeName = "gold",
+	}
+
+	local State: { [string]: any } = {
+		AutoGather = false,
+		TeleportGather = false,
+		GatherAround = false,
+		LegitMode = false,
+		GatherSpeed = 80,
+		HitRange = 45,
+		LegitReach = 8,
+		LegitHitDelay = 1.2,
+		ResourcesToCollect = {
+			["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
+			["Rock"] = true, ["Sand"] = false, ["Clay"] = false,
+			["Coal"] = false, ["Copper"] = false, ["Gold"] = false,
+			["Iron"] = false, ["Tin"] = false, ["Sulfur"] = false,
+		},
+		StatusEnabled = true,
+
+		AutoSell = false,
+		SellArgStyle = "name_amount",
+
+		PlayerESP = false,
+		PlayerBox = true,
+		PlayerName = true,
+		PlayerDistance = true,
+		PlayerHealth = true,
+		PlayerHealthText = false,
+		PlayerMaxDist = 700,
+
+		ResourceESP = false,
+		ResourceBox = true,
+		ResourceName = true,
+		ResourceDistance = true,
+		ResourceMaxDist = 500,
+		ResourceLimit = 80,
+		ResourceTypeFilter = {
+			["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
+			["Rock"] = true, ["Sand"] = false, ["Clay"] = false,
+			["Coal"] = false, ["Copper"] = false, ["Gold"] = false,
+			["Iron"] = false, ["Tin"] = false, ["Sulfur"] = false,
+		},
+		ResourcePriority = {
+			["Gold"] = 9, ["Sulfur"] = 8, ["Iron"] = 7, ["Copper"] = 6,
+			["Coal"] = 5, ["Tin"] = 5, ["Clay"] = 3, ["Sand"] = 3,
+			["Rock"] = 2, ["Cherry Tree"] = 2, ["Rubber Tree"] = 2, ["Tree"] = 1,
+		},
+		PriorityWeight = 40,
+
+		Fullbright = false,
+		NoShadows = false,
+		XRay = false,
+
+		FOV = 70,
+		CamZoom = 128,
+
+		AntiAFK = true,
+		InfiniteJump = false,
+		InfJumpKey = Enum.KeyCode.V,
+		Fly = false,
+		FlyKey = Enum.KeyCode.F,
+		FlySpeed = 100,
+		Noclip = false,
+		NoclipKey = Enum.KeyCode.N,
+
+		EnableWalkSpeed = false,
+		WalkSpeed = 40,
+		WalkSpeedMethod = "Normal",
+		JumpPower = 50,
+		Gravity = workspace.Gravity,
+		MenuKey = Enum.KeyCode.RightShift,
+		GatherKey = Enum.KeyCode.G,
+		PanicKey = Enum.KeyCode.End,
+
+		StealthProfile = "Balanced",
+		SoftTeleport = false,
+		SoftTeleportSpeed = 220,
+		UsePin = true,
+		PinMax = 6,
+		VelocityClamp = false,
+		MaxVelocity = 160,
+		LandingJitter = true,
+		TravelHops = false,
+		HopDistance = 180,
+		HitGap = 0.12,
+		FireFloor = 0.03,
+		LandSpread = 1.4,
+		SkipSeconds = 8,
+		ClusterRadius = 90,
+		ClusterSeconds = 60,
+
+		AutoRejoin = false,
+
+		UIScale = 1,
+		AutoUIScale = true,
+		TouchButton = true,
+		ThemeAccent = Color3.fromRGB(212, 160, 64),
+		ThemeAccent2 = Color3.fromRGB(196, 112, 48),
+		ThemeName = "gold",
+		UIGlow = true,
+		UITransparency = 0,
+
+		AimboT = false,
+		AimKey = "Hold",
+		AimKeyCode = Enum.UserInputType.MouseButton2,
+		AimPart = "Head",
+		Smoothness = 0,
+		AimMaxDist = 300,
+		FOVCheck = true,
+		FOVRadius = 120,
+		WallCheck = true,
+		AliveCheck = true,
+		TeamCheck = false,
+		FriendCheck = false,
+		ShowFOVCircle = true,
+		FOVColor = Color3.fromRGB(212, 160, 64),
+		FOVFollowMouse = false,
+		TargetIndicator = false,
+		AimPrediction = false,
+		AimPredictStrength = 12,
+		AimCurve = "Ease",
+
+		DebugMode = false,
+		SafeMode = false,
+		PanicMode = false,
+
+		_statusLabel = nil,
+		_statusDot = nil,
+		_debugLabel = nil,
+		_debugLog = {},
+		_rescanScheduled = false,
+	}
+
+	local EnvDefaults = {
+		Gravity = workspace.Gravity,
+		CameraZoom = player.CameraMaxZoomDistance,
+		FieldOfView = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70,
+		GlobalShadows = Lighting.GlobalShadows,
+	}
+
+	local CLAMPS: { [string]: { min: number, max: number, fallback: number } } = {
+		FlySpeed = { min = 1, max = 500, fallback = 100 },
+		JumpPower = { min = 1, max = 500, fallback = 50 },
+		WalkSpeed = { min = 1, max = 500, fallback = 16 },
+		FOV = { min = 40, max = 120, fallback = 70 },
+		CamZoom = { min = 16, max = 400, fallback = 128 },
+		HitRange = { min = 4, max = 200, fallback = 45 },
+		LegitReach = { min = 2, max = 20, fallback = 8 },
+		LegitHitDelay = { min = 0.05, max = 3, fallback = 1.2 },
+		HitGap = { min = 0.05, max = 3, fallback = 0.12 },
+		FireFloor = { min = 0.01, max = 1, fallback = 0.03 },
+		GatherSpeed = { min = 10, max = 400, fallback = 80 },
+		SoftTeleportSpeed = { min = 20, max = 800, fallback = 220 },
+		PinMax = { min = 0, max = 600, fallback = 6 },
+		MaxVelocity = { min = 20, max = 600, fallback = 160 },
+		HopDistance = { min = 20, max = 600, fallback = 180 },
+		LandSpread = { min = 0, max = 8, fallback = 1.4 },
+		SkipSeconds = { min = 1, max = 60, fallback = 8 },
+		ClusterRadius = { min = 10, max = 400, fallback = 90 },
+		ClusterSeconds = { min = 5, max = 300, fallback = 60 },
+		PriorityWeight = { min = 0, max = 200, fallback = 40 },
+		PlayerMaxDist = { min = 50, max = 2000, fallback = 700 },
+		ResourceMaxDist = { min = 50, max = 2000, fallback = 500 },
+		ResourceLimit = { min = 8, max = 200, fallback = 80 },
+		UIScale = { min = 0.6, max = 1.6, fallback = 1 },
+		UITransparency = { min = 0, max = 0.6, fallback = 0 },
+		AimMaxDist = { min = 20, max = 2000, fallback = 300 },
+		FOVRadius = { min = 20, max = 400, fallback = 120 },
+		Smoothness = { min = 0, max = 1, fallback = 0 },
+		AimPredictStrength = { min = 0, max = 40, fallback = 12 },
+		Gravity = { min = 0, max = 500, fallback = 196.2 },
+	}
+
+	local function getState(key: string, fallback: any): any
+		local v = State[key]
+		if v == nil then
+			return fallback
+		end
+		return v
+	end
+
+	local function validateState()
+		for key, spec in CLAMPS do
+			State[key] = clampNum(State[key], spec.min, spec.max, spec.fallback)
+		end
+		if type(State.ResourcesToCollect) ~= "table" then
+			State.ResourcesToCollect = {
+				["Tree"] = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
+				["Rock"] = true, ["Sand"] = false, ["Clay"] = false,
+				["Coal"] = false, ["Copper"] = false, ["Gold"] = false,
+				["Iron"] = false, ["Tin"] = false, ["Sulfur"] = false,
+			}
+		end
+		local names = Hub.RESOURCE_NAMES
+		if names then
+			for k in State.ResourcesToCollect do
+				if not names[k] then
+					State.ResourcesToCollect[k] = nil
+				end
+			end
+		end
+		if State.FOVRadius ~= State.FOVRadius then
+			State.FOVRadius = 120
+		end
+		local sell = State.SellArgStyle
+		local styles = Hub.SELL_STYLES
+		if styles then
+			local ok = false
+			for _, s in styles do
+				if s == sell then
+					ok = true
+					break
+				end
+			end
+			if not ok then
+				State.SellArgStyle = "name_amount"
+			end
+		end
+	end
+
+	validateState()
+	pcall(function()
+		table.freeze(ConfigDefaults)
+	end)
+
+	Hub.State = State
+	Hub.EnvDefaults = EnvDefaults
+	Hub.ConfigDefaults = ConfigDefaults
+	Hub.getState = getState
+	Hub.validateState = validateState
+	Hub.CLAMPS = CLAMPS
+	return Hub
+end
+    end)
+
+    def("theme", function()
+-- Charcoal + gold by default. Extra presets expand the original Gold/Ember/Sage/Sand/Mono set.
+
+return function(Hub: any)
+	local Theme = {
+		Bg = Color3.fromRGB(16, 16, 16),
+		Glass = Color3.fromRGB(26, 26, 26),
+		GlassHi = Color3.fromRGB(36, 36, 36),
+		Stroke = Color3.fromRGB(48, 48, 48),
+		StrokeHi = Color3.fromRGB(196, 148, 64),
+		Accent = Color3.fromRGB(212, 160, 64),
+		Accent2 = Color3.fromRGB(196, 112, 48),
+		Success = Color3.fromRGB(92, 196, 128),
+		Warn = Color3.fromRGB(232, 176, 72),
+		Danger = Color3.fromRGB(224, 88, 88),
+		Text = Color3.fromRGB(240, 238, 232),
+		TextDim = Color3.fromRGB(160, 156, 148),
+		TextFaint = Color3.fromRGB(104, 100, 94),
+		TrackOff = Color3.fromRGB(48, 48, 48),
+		Font = Enum.Font.Gotham,
+		FontBold = Enum.Font.GothamMedium,
+		FontBlack = Enum.Font.GothamBold,
+	}
+
+	local PRESETS = {
+		dark = { Accent = Color3.fromRGB(200, 200, 200), Accent2 = Color3.fromRGB(120, 120, 120) },
+		gold = { Accent = Color3.fromRGB(212, 160, 64), Accent2 = Color3.fromRGB(196, 112, 48) },
+		crimson = { Accent = Color3.fromRGB(208, 64, 72), Accent2 = Color3.fromRGB(140, 36, 40) },
+		emerald = { Accent = Color3.fromRGB(64, 180, 120), Accent2 = Color3.fromRGB(32, 120, 80) },
+		neon = { Accent = Color3.fromRGB(80, 255, 200), Accent2 = Color3.fromRGB(40, 180, 255) },
+		purple = { Accent = Color3.fromRGB(160, 96, 220), Accent2 = Color3.fromRGB(96, 48, 160) },
+		ember = { Accent = Color3.fromRGB(220, 96, 48), Accent2 = Color3.fromRGB(160, 48, 32) },
+		sage = { Accent = Color3.fromRGB(120, 160, 112), Accent2 = Color3.fromRGB(72, 112, 80) },
+		sand = { Accent = Color3.fromRGB(196, 168, 112), Accent2 = Color3.fromRGB(148, 116, 72) },
+		mono = { Accent = Color3.fromRGB(180, 180, 180), Accent2 = Color3.fromRGB(96, 96, 96) },
+	}
+
+	local function mix(a: Color3, b: Color3, t: number): Color3
+		return Color3.new(
+			a.R + (b.R - a.R) * t,
+			a.G + (b.G - a.G) * t,
+			a.B + (b.B - a.B) * t
+		)
+	end
+
+	local function applyAccents(accent: Color3, accent2: Color3)
+		Theme.Accent = accent
+		Theme.Accent2 = accent2
+		Theme.StrokeHi = mix(accent, Color3.fromRGB(48, 48, 48), 0.25)
+		local State = Hub.State
+		if State then
+			State.ThemeAccent = accent
+			State.ThemeAccent2 = accent2
+			State.FOVColor = accent
+		end
+		local applyTheme = Hub.applyTheme
+		if type(applyTheme) == "function" then
+			pcall(applyTheme)
+		end
+	end
+
+	local function applyPreset(name: string)
+		local preset = PRESETS[string.lower(name)]
+		if not preset then
+			return
+		end
+		if Hub.State then
+			Hub.State.ThemeName = string.lower(name)
+		end
+		applyAccents(preset.Accent, preset.Accent2)
+	end
+
+	Hub.Theme = Theme
+	Hub.ThemePresets = PRESETS
+	Hub.applyAccents = applyAccents
+	Hub.applyThemePreset = applyPreset
+	return Hub
+end
+    end)
+
+    def("cleanup", function()
+-- Connection tracking, page-scoped debris, and the deterministic Unload pipeline.
+
+return function(Hub: any)
+	local Flags = Hub.Flags
+	local player = Hub.player
+	local playerGui = Hub.playerGui
+	local Lighting = Hub.Services.Lighting
+	local RunService = Hub.Services.RunService
+
+	local Connections: { any } = {}
+	local connectionMap: { [string]: any } = {}
+	local pageConnections: { any } = {}
+	local pageDebris: { Instance } = {}
+	local pageStore: { [string]: { connections: { any }, debris: { Instance }, data: { [string]: any } } } = {}
+
+	local function track(conn)
+		table.insert(Connections, conn)
+		return conn
+	end
+
+	local function trackNamed(name: string, conn)
+		local prev = connectionMap[name]
+		if prev then
+			pcall(function()
+				prev:Disconnect()
+			end)
+		end
+		connectionMap[name] = conn
+		return track(conn)
+	end
+
+	local function disconnectAll()
+		for _, c in Connections do
+			pcall(function()
+				c:Disconnect()
+			end)
+		end
+		table.clear(Connections)
+		for name, c in connectionMap do
+			pcall(function()
+				c:Disconnect()
+			end)
+			connectionMap[name] = nil
+		end
+	end
+
+	local function trackPage(conn)
+		table.insert(pageConnections, conn)
+		return conn
+	end
+
+	local function holdDebris(inst)
+		table.insert(pageDebris, inst)
+		return inst
+	end
+
+	local function clearPageScope()
+		for _, c in pageConnections do
+			pcall(function()
+				c:Disconnect()
+			end)
+		end
+		table.clear(pageConnections)
+		for _, inst in pageDebris do
+			pcall(function()
+				inst:Destroy()
+			end)
+		end
+		table.clear(pageDebris)
+		if Hub.Scheduler then
+			Hub.Scheduler.removePages()
+		end
+	end
+
+	local function pageEnsure(name: string)
+		local page = pageStore[name]
+		if not page then
+			page = { connections = {}, debris = {}, data = {} }
+			pageStore[name] = page
+		end
+		return page
+	end
+
+	local Pages = {}
+
+	function Pages.open(name: string)
+		Hub.Flags.ActivePage = name
+		local page = pageEnsure(name)
+		local onFocus = Hub.PageHooks and Hub.PageHooks[name] and Hub.PageHooks[name].onFocus
+		if type(onFocus) == "function" then
+			pcall(onFocus, page.data)
+		end
+		return page
+	end
+
+	function Pages.close(name: string)
+		local page = pageStore[name]
+		if not page then
+			return
+		end
+		local onBlur = Hub.PageHooks and Hub.PageHooks[name] and Hub.PageHooks[name].onBlur
+		if type(onBlur) == "function" then
+			pcall(onBlur, page.data)
+		end
+		for _, c in page.connections do
+			pcall(function()
+				c:Disconnect()
+			end)
+		end
+		table.clear(page.connections)
+		for _, inst in page.debris do
+			pcall(function()
+				inst:Destroy()
+			end)
+		end
+		table.clear(page.debris)
+		if Hub.Scheduler then
+			Hub.Scheduler.removeGroup("page")
+		end
+	end
+
+	function Pages.hasData(name: string): boolean
+		local page = pageStore[name]
+		return page ~= nil and next(page.data) ~= nil
+	end
+
+	function Pages.cleanup(name: string)
+		Pages.close(name)
+		pageStore[name] = nil
+	end
+
+	function Pages.reset(name: string)
+		local page = pageEnsure(name)
+		table.clear(page.data)
+	end
+
+	local HUB_GUI_NAMES = {
+		TroyHub = true,
+		TroyHubESP = true,
+		TroyHubFOV = true,
+		TroyHubKill = true,
+		TroyHubTouch = true,
+		SamuraiHub = true,
+		SamuraiHubESP = true,
+		SamuraiHubFOV = true,
+		SamuraiHubKill = true,
+		SamuraiHubTouch = true,
+	}
+
+	local function isHubInstance(name: string): boolean
+		return HUB_GUI_NAMES[name] == true
+	end
+
+	local function restoreDefaults()
+		local EnvDefaults = Hub.EnvDefaults
+		if not EnvDefaults then
+			return
+		end
+		pcall(function()
+			workspace.Gravity = EnvDefaults.Gravity
+			player.CameraMaxZoomDistance = EnvDefaults.CameraZoom
+			Lighting.GlobalShadows = EnvDefaults.GlobalShadows
+			local cam = workspace.CurrentCamera
+			if cam then
+				cam.FieldOfView = EnvDefaults.FieldOfView
+			end
+			local hum = Hub.getHumanoid and Hub.getHumanoid()
+			if hum then
+				hum.WalkSpeed = 16
+			end
+		end)
+	end
+
+	local function destroyUI()
+		pcall(function()
+			if Hub.ScreenGui then
+				Hub.ScreenGui:Destroy()
+			end
+		end)
+		for _, g in playerGui:GetChildren() do
+			if isHubInstance(g.Name) then
+				pcall(function()
+					g:Destroy()
+				end)
+			end
+		end
+	end
+
+	local function removeGlobals()
+		pcall(function()
+			if rawget(_G, "TroyHubUnload") == Hub.Unload then
+				rawset(_G, "TroyHubUnload", nil)
+			end
+			if rawget(_G, "SamuraiHubUnload") == Hub.Unload then
+				rawset(_G, "SamuraiHubUnload", nil)
+			end
+			if rawget(_G, "TroyHub") == Hub then
+				rawset(_G, "TroyHub", nil)
+			end
+		end)
+		pcall(function()
+			if shared.TroyHub == Hub then
+				shared.TroyHub = nil
+			end
+			shared.TroyHubLoaded = nil
+		end)
+	end
+
+	local function Unload()
+		if Flags.Unloading then
+			return
+		end
+		Flags.Unloading = true
+
+		-- 1. disable all states / features
+		local State = Hub.State
+		if State then
+			State.AutoGather = false
+			State.PlayerESP = false
+			State.ResourceESP = false
+			State.Noclip = false
+			State.Fly = false
+			State.InfiniteJump = false
+			State.Fullbright = false
+			State.AimboT = false
+			State.GatherAround = false
+			State.LegitMode = false
+			State.TeleportGather = false
+			State.XRay = false
+			State.EnableWalkSpeed = false
+			State.PanicMode = true
+		end
+		if Hub.FeatureManager then
+			pcall(function()
+				Hub.FeatureManager.disableAll()
+			end)
+		end
+		local hooks = Hub.hooks
+		if hooks then
+			for _, key in {
+				"cancelMoveTween",
+				"unlockMovement",
+				"flightCleanup",
+				"noclipCleanup",
+				"infJumpCleanup",
+				"fullbrightCleanup",
+				"xrayCleanup",
+				"aimbotCleanup",
+			} do
+				local fn = hooks[key]
+				if type(fn) == "function" then
+					pcall(fn)
+				end
+			end
+		end
+		pcall(function()
+			RunService:UnbindFromRenderStep("TroyHubLighting")
+		end)
+		pcall(function()
+			RunService:UnbindFromRenderStep("SamuraiHubLighting")
+		end)
+
+		-- 2. stop scheduler jobs
+		if Hub.Scheduler then
+			Hub.Scheduler.clear()
+		end
+
+		-- 3. disconnect all signals
+		disconnectAll()
+
+		-- 4. clear page scope
+		clearPageScope()
+		for name in pageStore do
+			Pages.cleanup(name)
+		end
+		table.clear(pageStore)
+
+		-- 5. destroy UI
+		if hooks and hooks.destroyFov then
+			pcall(hooks.destroyFov)
+		end
+		destroyUI()
+
+		-- 6. restore defaults
+		restoreDefaults()
+
+		-- 7. remove globals
+		removeGlobals()
+
+		-- 8. clear registration tables
+		if Hub.FeatureManager then
+			pcall(function()
+				Hub.FeatureManager.clear()
+			end)
+		end
+		if Hub.Hotkeys then
+			pcall(function()
+				Hub.Hotkeys.clear()
+			end)
+		end
+		table.clear(Connections)
+		table.clear(connectionMap)
+
+		print("[Troy] Unloaded")
+	end
+
+	local function CloseAndUnload()
+		Unload()
+	end
+
+	local function installKillSwitch()
+		local hubKill = Instance.new("BindableEvent")
+		hubKill.Name = "TroyHubKill"
+		hubKill.Parent = playerGui
+		track(hubKill.Event:Connect(Unload))
+		track(hubKill.AncestryChanged:Connect(function(_, parent)
+			if parent == nil and not Flags.Unloading then
+				Unload()
+			end
+		end))
+	end
+
+	local function bindGlobals()
+		pcall(function()
+			rawset(_G, "TroyHubUnload", Unload)
+			rawset(_G, "SamuraiHubUnload", Unload) -- alias only
+			rawset(_G, "TroyHub", Hub)
+		end)
+		shared.TroyHub = Hub
+		shared.TroyHub.Unload = Unload
+	end
+
+	Hub.track = track
+	Hub.trackNamed = trackNamed
+	Hub.disconnectAll = disconnectAll
+	Hub.trackPage = trackPage
+	Hub.holdDebris = holdDebris
+	Hub.clearPageScope = clearPageScope
+	Hub.Pages = Pages
+	Hub.isHubInstance = isHubInstance
+	Hub.Unload = Unload
+	Hub.CloseAndUnload = CloseAndUnload
+	Hub.installKillSwitch = installKillSwitch
+	Hub.bindGlobals = bindGlobals
+	Hub.hooks = Hub.hooks or {}
+	Hub.PageHooks = Hub.PageHooks or {}
+	Hub.Connections = Connections
+	return Hub
+end
+    end)
+
+    def("scheduler", function()
+-- Two root connections (Heartbeat / RenderStepped). Jobs are namespaced,
+-- prioritized, isolated after repeated errors, and cannot re-enter add()
+-- from inside their own callback.
+
+return function(Hub: any)
+	local RunService = Hub.Services.RunService
+	local Flags = Hub.Flags
+
+	type Job = {
+		fn: (number) -> (),
+		interval: number,
+		last: number,
+		errors: number,
+		priority: number,
+		group: string,
+		budget: number,
+		disabled: boolean,
+		totalMs: number,
+		runs: number,
+		lastMs: number,
+	}
+
+	local Scheduler = {}
+	local phases: { [string]: { [string]: Job } } = { render = {}, logic = {} }
+	local runningName: string? = nil
+	local MAX_ERRORS = 12
+	local DEFAULT_BUDGET = 0.008
+
+	local function jobKey(group: string, name: string): string
+		if group == "" or group == "root" then
+			return name
+		end
+		return group .. ":" .. name
+	end
+
+	local function sortedNames(list: { [string]: Job }): { string }
+		local names = {}
+		for name in list do
+			table.insert(names, name)
+		end
+		table.sort(names, function(a, b)
+			local ja, jb = list[a], list[b]
+			if ja.priority == jb.priority then
+				return a < b
+			end
+			return ja.priority < jb.priority
+		end)
+		return names
+	end
+
+	local function runPhase(phaseName: string, dt: number)
+		if Flags.Unloading then
+			return
+		end
+		local now = os.clock()
+		local list = phases[phaseName]
+		for _, name in sortedNames(list) do
+			local job = list[name]
+			if not job or job.disabled then
+				continue
+			end
+			if job.interval > 0 and (now - job.last) < job.interval then
+				continue
+			end
+			job.last = now
+			runningName = name
+			local started = os.clock()
+			local ok, err = pcall(job.fn, dt)
+			local elapsed = os.clock() - started
+			runningName = nil
+			job.lastMs = elapsed * 1000
+			job.totalMs += elapsed * 1000
+			job.runs += 1
+			if elapsed > job.budget and Hub.Logger then
+				Hub.Logger.debug(string.format("Job '%s' over budget %.2fms", name, job.lastMs))
+			end
+			if not ok then
+				job.errors += 1
+				if job.errors <= 2 and Hub.log then
+					Hub.log("Task '" .. name .. "' error: " .. tostring(err))
+				end
+				if job.errors >= MAX_ERRORS then
+					job.disabled = true
+					if Hub.log then
+						Hub.log("Task '" .. name .. "' isolated after repeated errors")
+					end
+				end
+			end
+		end
+	end
+
+	function Scheduler.add(name: string, phaseName: string, interval: number, fn: (number) -> (), opts: any?)
+		local options = opts or {}
+		local group = options.group or "root"
+		local key = jobKey(group, name)
+		if runningName == key then
+			if Hub.Logger then
+				Hub.Logger.warn("Scheduler.add('" .. key .. "') ignored (job re-entered itself)")
+			end
+			return
+		end
+		local phase = phases[phaseName]
+		if not phase then
+			return
+		end
+		phase[key] = {
+			fn = fn,
+			interval = interval,
+			last = 0,
+			errors = 0,
+			priority = options.priority or 50,
+			group = group,
+			budget = options.budget or DEFAULT_BUDGET,
+			disabled = false,
+			totalMs = 0,
+			runs = 0,
+			lastMs = 0,
+		}
+	end
+
+	function Scheduler.remove(name: string)
+		phases.render[name] = nil
+		phases.logic[name] = nil
+	end
+
+	function Scheduler.removeGroup(group: string)
+		local prefix = group .. ":"
+		for _, list in phases do
+			for name in list do
+				if string.sub(name, 1, #prefix) == prefix then
+					list[name] = nil
+				end
+			end
+		end
+	end
+
+	function Scheduler.removePages()
+		Scheduler.removeGroup("page")
+		for _, list in phases do
+			for name in list do
+				if string.sub(name, 1, 5) == "page:" then
+					list[name] = nil
+				end
+			end
+		end
+	end
+
+	function Scheduler.clear()
+		table.clear(phases.render)
+		table.clear(phases.logic)
+	end
+
+	function Scheduler.snapshot(): { { name: string, phase: string, errors: number, lastMs: number, disabled: boolean } }
+		local out = {}
+		for phaseName, list in phases do
+			for name, job in list do
+				table.insert(out, {
+					name = name,
+					phase = phaseName,
+					errors = job.errors,
+					lastMs = job.lastMs,
+					disabled = job.disabled,
+					runs = job.runs,
+					priority = job.priority,
+				})
+			end
+		end
+		return out
+	end
+
+	function Scheduler.count(): number
+		local n = 0
+		for _, list in phases do
+			for _ in list do
+				n += 1
+			end
+		end
+		return n
+	end
+
+	function Scheduler.start()
+		Hub.track(RunService.RenderStepped:Connect(function(dt)
+			runPhase("render", dt)
+		end))
+		Hub.track(RunService.Heartbeat:Connect(function(dt)
+			runPhase("logic", dt)
+		end))
+	end
+
+	Hub.Scheduler = Scheduler
+	return Hub
+end
+    end)
+
+    def("featureManager", function()
+-- One registration path for every toggleable system:
+-- name, enable, disable, cleanup, state metadata, UI toggle binding, dependencies.
+
+return function(Hub: any)
+	type Feature = {
+		name: string,
+		enable: (() -> ())?,
+		disable: (() -> ())?,
+		cleanup: (() -> ())?,
+		getEnabled: (() -> boolean)?,
+		setEnabled: ((boolean) -> ())?,
+		stateKey: string?,
+		dependencies: { string }?,
+		safe: boolean?,
+		bindToggle: ((boolean) -> ())?,
+	}
+
+	local registry: { [string]: Feature } = {}
+	local order: { string } = {}
+
+	local FeatureManager = {}
+
+	function FeatureManager.register(spec: Feature)
+		assert(type(spec.name) == "string" and spec.name ~= "", "feature needs a name")
+		if not registry[spec.name] then
+			table.insert(order, spec.name)
+		end
+		registry[spec.name] = spec
+	end
+
+	function FeatureManager.get(name: string): Feature?
+		return registry[name]
+	end
+
+	function FeatureManager.list(): { string }
+		local copy = table.clone(order)
+		return copy
+	end
+
+	function FeatureManager.isEnabled(name: string): boolean
+		local spec = registry[name]
+		if not spec then
+			return false
+		end
+		if spec.getEnabled then
+			return spec.getEnabled()
+		end
+		local key = spec.stateKey
+		if key and Hub.State then
+			return Hub.State[key] == true
+		end
+		return false
+	end
+
+	function FeatureManager.set(name: string, on: boolean, notify: boolean?)
+		local spec = registry[name]
+		if not spec then
+			return
+		end
+		if Hub.Flags.Unloading and on then
+			return
+		end
+		if on and Hub.State and Hub.State.SafeMode and spec.safe == false then
+			if Hub.Logger then
+				Hub.Logger.warn("Safe Mode blocked " .. name)
+			end
+			return
+		end
+		if on and spec.dependencies then
+			for _, dep in spec.dependencies do
+				if not FeatureManager.isEnabled(dep) then
+					FeatureManager.set(dep, true, false)
+				end
+			end
+		end
+		if spec.setEnabled then
+			spec.setEnabled(on)
+		elseif on and spec.enable then
+			spec.enable()
+		elseif (not on) and spec.disable then
+			spec.disable()
+		end
+		if spec.bindToggle then
+			pcall(spec.bindToggle, on)
+		end
+		if notify and Hub.Notifications then
+			Hub.Notifications.info(name, on and "Enabled" or "Disabled")
+		end
+	end
+
+	function FeatureManager.disableAll()
+		for i = #order, 1, -1 do
+			local spec = registry[order[i]]
+			if spec then
+				pcall(function()
+					FeatureManager.set(spec.name, false, false)
+					if spec.cleanup then
+						spec.cleanup()
+					end
+				end)
+			end
+		end
+	end
+
+	function FeatureManager.cleanupAll()
+		for i = #order, 1, -1 do
+			local spec = registry[order[i]]
+			if spec and spec.cleanup then
+				pcall(spec.cleanup)
+			end
+		end
+	end
+
+	function FeatureManager.clear()
+		table.clear(registry)
+		table.clear(order)
+	end
+
+	function FeatureManager.active(): { string }
+		local live = {}
+		for _, name in order do
+			if FeatureManager.isEnabled(name) then
+				table.insert(live, name)
+			end
+		end
+		return live
+	end
+
+	-- Wrap the original FEATURE_SETTERS table once app.lua has defined it.
+	function FeatureManager.adoptSetters(setters: { [string]: (boolean) -> () }, toggleSync: { [string]: (boolean) -> () }?)
+		for name, setter in setters do
+			FeatureManager.register({
+				name = name,
+				stateKey = name,
+				setEnabled = setter,
+				bindToggle = toggleSync and toggleSync[name] or nil,
+				getEnabled = function()
+					return Hub.State[name] == true
+				end,
+				cleanup = function()
+					setter(false)
+				end,
+				safe = name ~= "AimboT" and name ~= "Fly" and name ~= "Noclip",
+			})
+		end
+	end
+
+	Hub.FeatureManager = FeatureManager
+	return Hub
+end
+    end)
+
+    def("hotkeys", function()
+-- One keybind manager: hold vs toggle, conflict warnings, status-bar preview.
+
+return function(Hub: any)
+	local UserInputService = Hub.Services.UserInputService
+
+	type Bind = {
+		id: string,
+		label: string,
+		stateKey: string,
+		mode: string, -- "toggle" | "hold"
+		aliases: { any },
+		onPress: (() -> ())?,
+		onRelease: (() -> ())?,
+	}
+
+	local binds: { [string]: Bind } = {}
+	local byCode: { [string]: string } = {}
+	local capturing: string? = nil
+
+	local function codeKey(bind): string
+		if typeof(bind) ~= "EnumItem" then
+			return ""
+		end
+		return tostring(bind)
+	end
+
+	local function pretty(bind): string
+		if typeof(bind) ~= "EnumItem" then
+			return "None"
+		end
+		local s = tostring(bind)
+		s = string.gsub(s, "^Enum%.KeyCode%.", "")
+		s = string.gsub(s, "^Enum%.UserInputType%.", "")
+		return s
+	end
+
+	local Hotkeys = {}
+
+	function Hotkeys.register(spec: Bind)
+		if binds[spec.id] then
+			Hotkeys.unbind(spec.id)
+		end
+		binds[spec.id] = spec
+		for _, alias in spec.aliases do
+			local key = codeKey(alias)
+			if key ~= "" then
+				local existing = byCode[key]
+				if existing and existing ~= spec.id then
+					if Hub.Notifications then
+						Hub.Notifications.warn(
+							"Hotkey",
+							pretty(alias) .. " already bound to " .. (binds[existing] and binds[existing].label or existing)
+						)
+					end
+				else
+					byCode[key] = spec.id
+				end
+			end
+		end
+	end
+
+	function Hotkeys.unbind(id: string)
+		local spec = binds[id]
+		if not spec then
+			return
+		end
+		for key, owner in byCode do
+			if owner == id then
+				byCode[key] = nil
+			end
+		end
+		binds[id] = nil
+	end
+
+	function Hotkeys.clear()
+		table.clear(binds)
+		table.clear(byCode)
+		capturing = nil
+	end
+
+	function Hotkeys.beginCapture(id: string)
+		capturing = id
+		Hub.Flags.keybindCapturing = true
+	end
+
+	function Hotkeys.endCapture()
+		capturing = nil
+		Hub.Flags.keybindCapturing = false
+	end
+
+	function Hotkeys.isCapturing(): boolean
+		return capturing ~= nil or Hub.Flags.keybindCapturing == true
+	end
+
+	function Hotkeys.preview(): string
+		local parts = {}
+		for _, spec in binds do
+			local first = spec.aliases[1]
+			table.insert(parts, spec.label .. " " .. pretty(first))
+		end
+		table.sort(parts)
+		return table.concat(parts, "  ·  ")
+	end
+
+	function Hotkeys.adoptState()
+		local State = Hub.State
+		if not State then
+			return
+		end
+		Hotkeys.register({
+			id = "menu",
+			label = "Menu",
+			stateKey = "MenuKey",
+			mode = "toggle",
+			aliases = { State.MenuKey },
+		})
+		Hotkeys.register({
+			id = "gather",
+			label = "Gather",
+			stateKey = "GatherKey",
+			mode = "toggle",
+			aliases = { State.GatherKey },
+		})
+		Hotkeys.register({
+			id = "panic",
+			label = "Panic",
+			stateKey = "PanicKey",
+			mode = "toggle",
+			aliases = { State.PanicKey },
+		})
+		Hotkeys.register({
+			id = "fly",
+			label = "Fly",
+			stateKey = "FlyKey",
+			mode = "toggle",
+			aliases = { State.FlyKey },
+		})
+		Hotkeys.register({
+			id = "noclip",
+			label = "Noclip",
+			stateKey = "NoclipKey",
+			mode = "toggle",
+			aliases = { State.NoclipKey },
+		})
+		Hotkeys.register({
+			id = "infjump",
+			label = "InfJump",
+			stateKey = "InfJumpKey",
+			mode = "toggle",
+			aliases = { State.InfJumpKey },
+		})
+		Hotkeys.register({
+			id = "aim",
+			label = "Aim",
+			stateKey = "AimKeyCode",
+			mode = State.AimKey == "Hold" and "hold" or "toggle",
+			aliases = { State.AimKeyCode },
+		})
+	end
+
+	function Hotkeys.matches(input, bind): boolean
+		return Hub.inputMatches(input, bind)
+	end
+
+	Hub.Hotkeys = Hotkeys
+	Hub.prettyKey = pretty
+	return Hub
+end
+    end)
+
+    def("app", function()
+-- Runtime body: GUI, features, farm, ESP, combat. Framework services come from Hub.
+return function(Hub: any)
+    local Flags = Hub.Flags
+    local State = Hub.State
+    local Theme = Hub.Theme
+    local Scheduler = Hub.Scheduler
+    local player = Hub.player
+    local playerGui = Hub.playerGui
+    local clampNum = Hub.clampNum
+    local log = Hub.log
+    local new = Hub.new
+    local corner = Hub.corner
+    local stroke = Hub.stroke
+    local pad = Hub.pad
+    local gradient = Hub.gradient
+    local tween = Hub.tween
+    local isPointerBegin = Hub.isPointerBegin
+    local isPointerMove = Hub.isPointerMove
+    local isKeyDown = Hub.isKeyDown
+    local inputMatches = Hub.inputMatches
+    local FrameRate = Hub.FrameRate
+    local getPingMs = Hub.getPingMs
+    local track = Hub.track
+    local trackPage = Hub.trackPage
+    local holdDebris = Hub.holdDebris
+    local clearPageScope = Hub.clearPageScope
+    local disconnectAll = Hub.disconnectAll
+    local Unload = Hub.Unload
+    local EnvDefaults = Hub.EnvDefaults
+    local FarmStats = Hub.FarmStats
+    local RESOURCE_NAMES = Hub.RESOURCE_NAMES
+    local RESOURCE_LIST = Hub.RESOURCE_LIST
+    local SELL_STYLES = Hub.SELL_STYLES
+    local fireSell = Hub.fireSell
+    local isHubInstance = Hub.isHubInstance
+    local Players = Hub.Services.Players
+    local UserInputService = Hub.Services.UserInputService
+    local RunService = Hub.Services.RunService
+    local TweenService = Hub.Services.TweenService
+    local ReplicatedStorage = Hub.Services.ReplicatedStorage
+    local Lighting = Hub.Services.Lighting
+    local TeleportService = Hub.Services.TeleportService
+    local Stats = Hub.Services.Stats
+    local HttpService = Hub.Services.HttpService
+    local GuiService = Hub.Services.GuiService
+    local ProximityPromptService = Hub.Services.ProximityPromptService
+
+    local cancelMoveTween
+    local unlockMovement
+    local clearNodeOffsets
+    local flightCleanup
+    local noclipCleanup
+    local infJumpCleanup
+    local fullbrightCleanup
+    local xrayCleanup
+    local aimbotCleanup
+    local fovCircleGui, fovCircle
+
 
 -- Only accrues while a farm mode is actually on, so nodes/min reflects
 -- farming time rather than how long the hub has been injected.
 Scheduler.add("farmclock", "logic", 1, function()
-    if Unloading then return end
+    if Flags.Unloading then return end
     if State.AutoGather or State.TeleportGather or State.GatherAround or State.LegitMode then
         FarmStats.runSeconds += 1
     end
@@ -576,107 +1868,11 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   v1.9.7",
+    Text = "Humanlife 3: Civilization   ·   2.0.0",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
 
--- ============================================================
---  UNLOAD / CLOSE
--- ============================================================
-local cancelMoveTween
-local unlockMovement
--- Assigned in the gather section; the respawn handler needs it, and that runs
--- long before the gather code is reached on the way down the file.
-local clearNodeOffsets
-local flightCleanup
-local noclipCleanup
-local infJumpCleanup
-local fullbrightCleanup
-local xrayCleanup
-local aimbotCleanup
-local fovCircleGui, fovCircle
-
-local EnvDefaults = {
-    Gravity        = workspace.Gravity,
-    CameraZoom     = player.CameraMaxZoomDistance,
-    FieldOfView    = workspace.CurrentCamera and workspace.CurrentCamera.FieldOfView or 70,
-    GlobalShadows  = Lighting.GlobalShadows,
-}
-
-local function Unload()
-    if Unloading then return end
-    Unloading = true
-    State.AutoGather = false
-    State.PlayerESP = false
-    State.ResourceESP = false
-    State.Noclip = false
-    State.Fly = false
-    State.InfiniteJump = false
-    State.Fullbright = false
-    State.AimboT = false
-    State.GatherAround = false
-    State.LegitMode = false
-    State.TeleportGather = false
-    State.XRay = false
-    State.EnableWalkSpeed = false
-    if cancelMoveTween then cancelMoveTween() end
-    if unlockMovement then unlockMovement() end
-    if flightCleanup then flightCleanup() end
-    if noclipCleanup then noclipCleanup() end
-    if infJumpCleanup then infJumpCleanup() end
-    if fullbrightCleanup then fullbrightCleanup() end
-    pcall(function() RunService:UnbindFromRenderStep("TroyHubLighting") end)
-    pcall(function() RunService:UnbindFromRenderStep("SamuraiHubLighting") end)
-    if xrayCleanup then xrayCleanup() end
-    if aimbotCleanup then aimbotCleanup() end
-    if fovCircleGui then pcall(function() fovCircleGui:Destroy() end) end
-    pcall(function()
-        workspace.Gravity = EnvDefaults.Gravity
-        player.CameraMaxZoomDistance = EnvDefaults.CameraZoom
-        Lighting.GlobalShadows = EnvDefaults.GlobalShadows
-        local cam = workspace.CurrentCamera
-        if cam then cam.FieldOfView = EnvDefaults.FieldOfView end
-        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum and hum:IsA("Humanoid") then
-            hum.WalkSpeed = 16
-        end
-    end)
-    Scheduler.clear()
-    disconnectAll()
-    clearPageScope()
-    pcall(function()
-        if rawget(_G, "TroyHubUnload") == Unload then
-            rawset(_G, "TroyHubUnload", nil)
-        end
-        if rawget(_G, "SamuraiHubUnload") == Unload then
-            rawset(_G, "SamuraiHubUnload", nil)
-        end
-    end)
-    pcall(function() ScreenGui:Destroy() end)
-    for _, g in playerGui:GetChildren() do
-        if isHubInstance(g.Name) then
-            pcall(function() g:Destroy() end)
-        end
-    end
-    print("[Troy] Unloaded")
-end
-
-pcall(function()
-    rawset(_G, "TroyHubUnload", Unload)
-    rawset(_G, "SamuraiHubUnload", Unload)
-end)
-do
-    local hubKill = Instance.new("BindableEvent")
-    hubKill.Name = "TroyHubKill"
-    hubKill.Parent = playerGui
-    track(hubKill.Event:Connect(Unload))
-    track(hubKill.AncestryChanged:Connect(function(_, parent)
-        if parent == nil and not Unloading then
-            Unload()
-        end
-    end))
-end
 
 local function CloseAndUnload()
     tween(Main, { Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1 }, 0.18,
@@ -925,7 +2121,7 @@ function Features.setInfiniteJump(on: boolean)
     if infJumpCleanup then infJumpCleanup(); infJumpCleanup = nil end
     if not on then return end
     local conn = UserInputService.JumpRequest:Connect(function()
-        if Unloading or not State.InfiniteJump then return end
+        if Flags.Unloading or not State.InfiniteJump then return end
         local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
         if hum and hum:IsA("Humanoid") then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
     end)
@@ -939,7 +2135,7 @@ function Features.setFly(on: boolean)
     if not on then return end
     local bodyVelocity, bodyGyro
     Scheduler.add("fly", "render", 0, function()
-        if Unloading or not State.Fly then return end
+        if Flags.Unloading or not State.Fly then return end
         -- Leftover BodyVelocity/Gyro will fight Auto Gather CFrame flight
         -- and cancel hits. Tear them down while the farm is flying.
         if State.TeleportGather or (State.AutoGather and not State.LegitMode) then
@@ -993,7 +2189,7 @@ function Features.setNoclip(on: boolean)
     if not on then return end
     local restore = {}
     Scheduler.add("noclip", "logic", 0, function()
-        if Unloading or not State.Noclip then return end
+        if Flags.Unloading or not State.Noclip then return end
         local char = player.Character
         if not char then return end
         for _, p in char:GetDescendants() do
@@ -1029,7 +2225,7 @@ function Features.setXRay(on: boolean)
     params.FilterType = Enum.RaycastFilterType.Exclude
     params.MaxParts = 500
     Scheduler.add("xray", "logic", 0.3, function()
-        if Unloading or not State.XRay then return end
+        if Flags.Unloading or not State.XRay then return end
         local cam = workspace.CurrentCamera
         if not cam then return end
         local char = player.Character
@@ -1219,7 +2415,7 @@ local function applyFullbrightFrame()
 end
 
 local function lightingStep()
-    if Unloading then return end
+    if Flags.Unloading then return end
     if State.Fullbright then
         applyFullbrightFrame()
     elseif State.NoShadows then
@@ -1228,7 +2424,7 @@ local function lightingStep()
 end
 
 local function bindLightingStep()
-    if lightingBound or Unloading then return end
+    if lightingBound or Flags.Unloading then return end
     lightingBound = true
     pcall(function() RunService:UnbindFromRenderStep(LIGHT_BIND) end)
     -- Last+100 sits after the game's own Last bind. Heartbeat covers the
@@ -1238,7 +2434,7 @@ local function bindLightingStep()
         RunService:BindToRenderStep(LIGHT_BIND, Enum.RenderPriority.Last.Value + 100, lightingStep)
     end)
     table.insert(lightingPropConns, Lighting.ChildAdded:Connect(function(inst)
-        if Unloading or not State.Fullbright then return end
+        if Flags.Unloading or not State.Fullbright then return end
         tameLightingChild(inst)
     end))
 end
@@ -1278,7 +2474,7 @@ function Features.setFullbright(on: boolean)
         fullbrightCleanup = function()
             restoreFullbrightSaved()
             unbindLightingStep()
-            if not Unloading and State.NoShadows then
+            if not Flags.Unloading and State.NoShadows then
                 Lighting.GlobalShadows = false
                 bindLightingStep()
             end
@@ -1501,7 +2697,7 @@ do
         -- about to be rebuilt, and destroying a widget inside its own click
         -- handler is asking for trouble.
         task.defer(function()
-            if rerenderCurrentPage and not Unloading then pcall(rerenderCurrentPage) end
+            if rerenderCurrentPage and not Flags.Unloading then pcall(rerenderCurrentPage) end
         end)
         return applied
     end
@@ -1793,7 +2989,7 @@ do
     end
 
     local function attemptRejoin(reason: string)
-        if rejoined or Unloading then return end
+        if rejoined or Flags.Unloading then return end
         rejoined = true
         log("auto-rejoin: " .. reason)
         task.delay(1.5, function()
@@ -2556,7 +3752,7 @@ function ResourceScanner.pulse(budget: number)
 end
 
 function ResourceScanner.discover()
-    if Unloading then return end
+    if Flags.Unloading then return end
     local now = os.clock()
     if now - farmStore.lastDiscover < 0.2 then return end
     farmStore.lastDiscover = now
@@ -2581,7 +3777,7 @@ function ResourceScanner.buildCache(folder: Instance)
     task.spawn(function()
         local children = folder:GetChildren()
         for i, obj in children do
-            if Unloading then return end
+            if Flags.Unloading then return end
             if ResourceScanner.typeOf(obj) then
                 ResourceScanner.consider(obj)
             else
@@ -2642,7 +3838,7 @@ function ResourceScanner.watch(callback)
             queued = true
             task.delay(0.4, function()
                 queued = false
-                if not Unloading then callback() end
+                if not Flags.Unloading then callback() end
             end)
         end
         table.insert(conns, folder.DescendantAdded:Connect(function(obj)
@@ -2676,7 +3872,7 @@ function ResourceScanner.watch(callback)
 end
 
     Scheduler.add("discover", "logic", 0.2, function()
-        if Unloading then return end
+        if Flags.Unloading then return end
         if State.ResourceESP or State.AutoGather or State.TeleportGather
             or State.GatherAround or State.LegitMode then
             ResourceScanner.discover()
@@ -2745,7 +3941,7 @@ end
 -- frame, then returning to where the user was. Runs shortly after injection so
 -- the first page the user sees is not blocked by it.
 local function buildSettingsIndex()
-    if Search.ready or Unloading then return end
+    if Search.ready or Flags.Unloading then return end
     Search.ready = true
     local restore = currentPage
     for name in Pages do
@@ -2941,7 +4137,7 @@ Pages["Auto Gather"] = function()
             end
             local before = snapshot()
             for i, style in SELL_STYLES do
-                if Unloading then return end
+                if Flags.Unloading then return end
                 log(string.format("Sell test [%d] style=%s", i, style))
                 pcall(function()
                     local ok = fireSell(market, style, "Tree")
@@ -3365,7 +4561,7 @@ Pages["Resources"] = function()
         State._rescanScheduled = true
         task.delay(1, function()
             State._rescanScheduled = false
-            if Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
+            if Flags.Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
             local nextBuckets = ResourceScanner.scan()
             local names = {}
             for name in nextBuckets do table.insert(names, name) end
@@ -3428,7 +4624,7 @@ do
         logFn(string.format("Probe: testing %s with %d arg-shapes", remoteName, #values))
 
         for i, args in values do
-            if Unloading then return false, "unloading" end
+            if Flags.Unloading then return false, "unloading" end
             local packed = table.pack(table.unpack(args))
             local ok, err = pcall(function()
                 remote:FireServer(table.unpack(packed, 1, packed.n))
@@ -3525,7 +4721,7 @@ Pages["Server"] = function()
         TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = c2,
     })
     Scheduler.add("page:serverinfo", "logic", 0.5, function()
-        if Unloading or currentPage ~= "Server" or not infoLabel.Parent then return end
+        if Flags.Unloading or currentPage ~= "Server" or not infoLabel.Parent then return end
         local mem = 0
         pcall(function() mem = math.floor(Stats:GetTotalMemoryUsageMb()) end)
         local fps = math.floor(FrameRate.fps + 0.5)
@@ -3813,7 +5009,7 @@ Pages["UI Settings"] = function()
     sectionTitle("Danger", y); y += 34
     local cDanger = card(y, 56); y += 66
     local unloadBtn = actionButton(cDanger, "Unload Hub", 12, function()
-        Notifications.info("Troy", "Unloading…")
+        Notifications.info("Troy", "Flags.Unloading…")
         CloseAndUnload()
     end)
     unloadBtn.TextColor3 = Theme.Danger
@@ -3927,7 +5123,7 @@ Pages["Dashboard"] = function()
     Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
 
     Scheduler.add("page:dashboard", "logic", 0.4, function()
-        if Unloading or currentPage ~= "Dashboard" then return end
+        if Flags.Unloading or currentPage ~= "Dashboard" then return end
         local mem = 0
         pcall(function() mem = math.floor(Stats:GetTotalMemoryUsageMb()) end)
         if fpsVal.Parent then
@@ -4109,7 +5305,7 @@ do
     end
 
     local function syncTouchButton()
-        if Unloading then return end
+        if Flags.Unloading then return end
         local want = State.TouchButton == true and UserInputService.TouchEnabled
         if want and not touchBtn then buildTouchButton() end
         if touchGui then
@@ -4177,7 +5373,7 @@ end
 -- single huge velocity frame, so clamping the assembly is what matters, not
 -- WalkSpeed.
 Scheduler.add("velclamp", "logic", 0, function()
-    if Unloading or not State.VelocityClamp then return end
+    if Flags.Unloading or not State.VelocityClamp then return end
     local char = player.Character
     if not char then return end
     local root = char:FindFirstChild("HumanoidRootPart")
@@ -4192,7 +5388,7 @@ Scheduler.add("velclamp", "logic", 0, function()
 end)
 
 track(UserInputService.InputBegan:Connect(function(input, gpe)
-    if gpe or Unloading or keybindCapturing then return end
+    if gpe or Flags.Unloading or keybindCapturing then return end
     if inputMatches(input, State.PanicKey) then
         Panic()
         return
@@ -4235,13 +5431,13 @@ local function reapplyAfterSpawn(char: Model)
         if cam then cam.FieldOfView = State.FOV end
     end)
     local hum = char:WaitForChild("Humanoid", 10)
-    if Unloading or not hum or not hum:IsA("Humanoid") then return end
+    if Flags.Unloading or not hum or not hum:IsA("Humanoid") then return end
     if State.EnableWalkSpeed then applyWalkSettings(hum) end
     -- One live Died hook, replaced each spawn. Tracking a new one per death
     -- left a dead connection in the tracker for the whole session.
     if diedConn then pcall(function() (diedConn :: RBXScriptConnection):Disconnect() end) end
     diedConn = hum.Died:Connect(function()
-        if Unloading then return end
+        if Flags.Unloading then return end
         if cancelMoveTween then pcall(cancelMoveTween) end
         if unlockMovement then pcall(unlockMovement) end
     end)
@@ -4249,7 +5445,7 @@ local function reapplyAfterSpawn(char: Model)
 end
 
 track(player.CharacterAdded:Connect(function(char)
-    if Unloading then return end
+    if Flags.Unloading then return end
     task.spawn(function()
         reapplyAfterSpawn(char)
     end)
@@ -4266,7 +5462,7 @@ do
     end)
     if vu then
         track(player.Idled:Connect(function()
-            if Unloading or not State.AntiAFK then return end
+            if Flags.Unloading or not State.AntiAFK then return end
             local cam = workspace.CurrentCamera
             if not cam then return end
             pcall(function()
@@ -4461,7 +5657,7 @@ do
     end
 
     function ESP.step()
-        if Unloading then return end
+        if Flags.Unloading then return end
         -- Both ESP modes off: drop any leftover drawings once, then do no
         -- per-frame work at all instead of rebuilding tables every frame.
         if not State.PlayerESP and not State.ResourceESP then
@@ -4788,7 +5984,7 @@ do
     end
 
     Scheduler.add("aimbot", "render", 0, function()
-        if Unloading then return end
+        if Flags.Unloading then return end
         local cam = workspace.CurrentCamera
 
         if cam and State.ShowFOVCircle and State.AimboT then
@@ -4868,7 +6064,7 @@ end
 -- Keep WalkSpeed / JumpPower applied after the server overwrites them, and
 -- actually implement Boost (extra velocity) and Rigid (CFrame step).
 Scheduler.add("walkspeed", "logic", 0, function(dt)
-    if Unloading or not State.EnableWalkSpeed then return end
+    if Flags.Unloading or not State.EnableWalkSpeed then return end
     local hum = getHumanoid()
     local root = getRoot()
     if not hum or not root or hum.Health <= 0 then return end
@@ -5024,7 +6220,7 @@ end
 
 -- Safety net: never leave the root anchored once the farm stops needing it.
 Scheduler.add("unlockguard", "logic", 0.1, function()
-    if Unloading then return end
+    if Flags.Unloading then return end
     if movementLocked and not Farm.mining and Farm.dest == nil then
         unlockMovement()
     end
@@ -5039,7 +6235,7 @@ end)
 -- job is the unanchored hold. If even this loses, notePinDrift re-takes
 -- the actual pin for 2.5s.
 Scheduler.add("pinhold", "logic", 0, function()
-    if Unloading or not Farm.mining then return end
+    if Flags.Unloading or not Farm.mining then return end
     local dest, look = Farm.dest, Farm.look
     if not dest or not look then return end
     local root = getRoot()
@@ -5170,7 +6366,7 @@ end
 -- One nag, not one per retry: if the farm has been on and starved of a remote
 -- for a while, the game has almost certainly changed and the user should know.
 Scheduler.add("bindhealth", "logic", 5, function()
-    if Unloading then return end
+    if Flags.Unloading then return end
     local farmOn = State.AutoGather or State.TeleportGather or State.GatherAround or State.LegitMode
     if not farmOn then
         bindHealth.warnedAt = 0
@@ -5193,7 +6389,7 @@ track(ReplicatedStorage.ChildAdded:Connect(function() tryBindGather() end))
 track(workspace.ChildAdded:Connect(function() tryBindGather() end))
 task.spawn(function()
     for _ = 1, 40 do
-        if Unloading then return end
+        if Flags.Unloading then return end
         tryBindGather()
         if GatherRemote and ResourcesFolder then return end
         task.wait(0.5)
@@ -5575,7 +6771,7 @@ local function glideTo(dest: Vector3, lookAt: Vector3)
     local last = os.clock()
     local lastRemain = math.huge
     local stallSince = 0
-    while not Unloading and os.clock() < deadline do
+    while not Flags.Unloading and os.clock() < deadline do
         root = getRoot()
         if not root then return end
         local gap = dest - root.Position
@@ -5629,7 +6825,7 @@ local function snapTeleport(obj: Instance?, treePos: Vector3)
             local total = (dest - start).Magnitude
             local steps = math.min(math.floor(total / hop), 24)
             for i = 1, steps do
-                if Unloading then return end
+                if Flags.Unloading then return end
                 local r = getRoot()
                 if not r then return end
                 local at = start:Lerp(dest, i / (steps + 1))
@@ -5703,7 +6899,7 @@ local function drainUntilGone(radius: number, inst: Instance?, pos: Vector3?, ke
     -- Nodes only count once each, however many passes notice them missing.
     local counted = {}
     local kindOf = if inst then ResourceScanner.typeOf(inst) else nil
-    while keepGoing() and not Unloading and (os.clock() - t0) < DWELL_MAX do
+    while keepGoing() and not Flags.Unloading and (os.clock() - t0) < DWELL_MAX do
         local alive = getHumanoid()
         if not alive or alive.Health <= 0 then break end
         if inst and inst.Parent then
@@ -5828,7 +7024,7 @@ end
 local farmJob = { busy = false, wasFarming = false }
 
 local function farmPass()
-    if Unloading or not ScreenGui.Parent then return end
+    if Flags.Unloading or not ScreenGui.Parent then return end
 
     if not farmActive() then
         Farm.dest = nil
@@ -5865,7 +7061,7 @@ local function farmPass()
     end
 
     local keep = function()
-        return farmActive() and not Unloading and ScreenGui.Parent ~= nil
+        return farmActive() and not Flags.Unloading and ScreenGui.Parent ~= nil
     end
     local aroundRange = math.max(clampNum(State.HitRange, 10, 120, 45), 18)
     local fireRadius = math.max(16, math.min(aroundRange, 28))
@@ -5973,7 +7169,7 @@ local function farmPass()
 end
 
 Scheduler.add("farm", "logic", 0.08, function()
-    if Unloading or not ScreenGui.Parent then return end
+    if Flags.Unloading or not ScreenGui.Parent then return end
     if farmJob.busy then return end
     farmJob.busy = true
     task.spawn(function()
@@ -5994,7 +7190,7 @@ end)
 --  Runs last so every setter, page and loop it touches already exists.
 -- ============================================================
 task.defer(function()
-    if Unloading then return end
+    if Flags.Unloading then return end
 
     -- Restore a saved config before anything else, so the accent and the farm
     -- settings the user left behind are what they come back to.
@@ -6014,8 +7210,792 @@ task.defer(function()
 
     -- Index every page for the search box once the first page is up.
     task.delay(1.5, function()
-        if not Unloading then pcall(buildSettingsIndex) end
+        if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("v1.9.7 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.0 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
+    Hub.Features = Features
+    Hub.FEATURE_SETTERS = FEATURE_SETTERS
+    Hub.toggleSync = toggleSync
+    Hub.setFeature = setFeature
+    Hub.Config = Config
+    Hub.Stealth = Stealth
+    Hub.ScreenGui = ScreenGui
+    Hub.Notifications = Notifications
+    Hub.applyWalkSettings = applyWalkSettings
+    Hub.applyAccents = applyAccents
+    Hub.applyUiScale = applyUiScale
+    Hub.ResourceScanner = ResourceScanner
+    Hub.ServerTools = ServerTools
+    -- Closures over the runtime locals, so later assignments are visible to Unload.
+    Hub.hooks.cancelMoveTween = function()
+        if cancelMoveTween then cancelMoveTween() end
+    end
+    Hub.hooks.unlockMovement = function()
+        if unlockMovement then unlockMovement() end
+    end
+    Hub.hooks.clearNodeOffsets = function()
+        if clearNodeOffsets then clearNodeOffsets() end
+    end
+    Hub.hooks.flightCleanup = function()
+        if flightCleanup then flightCleanup() end
+    end
+    Hub.hooks.noclipCleanup = function()
+        if noclipCleanup then noclipCleanup() end
+    end
+    Hub.hooks.infJumpCleanup = function()
+        if infJumpCleanup then infJumpCleanup() end
+    end
+    Hub.hooks.fullbrightCleanup = function()
+        if fullbrightCleanup then fullbrightCleanup() end
+    end
+    Hub.hooks.xrayCleanup = function()
+        if xrayCleanup then xrayCleanup() end
+    end
+    Hub.hooks.aimbotCleanup = function()
+        if aimbotCleanup then aimbotCleanup() end
+    end
+    Hub.hooks.destroyFov = function()
+        if fovCircleGui then pcall(function() fovCircleGui:Destroy() end) end
+    end
+    return Hub
+end
+    end)
+
+    def("config", function()
+-- Extra profile layer on top of the in-app Config / Stealth tables.
+-- Schema versioning + migration live here so future State shape changes
+-- can rewrite old JSON without touching farm code.
+
+return function(Hub: any)
+	local ConfigX = {}
+
+	ConfigX.profiles = {
+		aggressive = "Fast",
+		balanced = "Balanced",
+		stealth = "Safe",
+		["low-resource"] = "Safe",
+		mobile = "Balanced",
+		["high-precision"] = "Balanced",
+	}
+
+	local PROFILE_OVERRIDES = {
+		["low-resource"] = {
+			ResourceLimit = 32,
+			PlayerMaxDist = 280,
+			ResourceMaxDist = 220,
+			TouchButton = true,
+			UIScale = 1.1,
+			AimboT = false,
+		},
+		mobile = {
+			TouchButton = true,
+			AutoUIScale = true,
+			UIScale = 1.15,
+			ShowFOVCircle = false,
+		},
+		["high-precision"] = {
+			HitGap = 0.18,
+			LegitHitDelay = 1.4,
+			AimPrediction = true,
+			AimPredictStrength = 10,
+			FOVCheck = true,
+			FOVRadius = 80,
+		},
+		aggressive = {
+			PriorityWeight = 70,
+			ClusterRadius = 70,
+			SkipSeconds = 5,
+		},
+	}
+
+	function ConfigX.applyProfile(name: string, notify: boolean?)
+		local key = string.lower(name)
+		local stealthName = ConfigX.profiles[key]
+		if stealthName and Hub.Stealth and Hub.Stealth.apply then
+			Hub.Stealth.apply(stealthName, false)
+		end
+		local extra = PROFILE_OVERRIDES[key]
+		if extra and Hub.State then
+			for k, v in extra do
+				Hub.State[k] = v
+			end
+		end
+		if Hub.validateState then
+			Hub.validateState()
+		end
+		if notify and Hub.Notifications then
+			Hub.Notifications.info("Profile", name)
+		end
+	end
+
+	function ConfigX.migrate(blob: any): any
+		if type(blob) ~= "table" then
+			return blob
+		end
+		local schema = tonumber(blob.__schema) or 1
+		if schema < 2 then
+			blob.__schema = 2
+			blob.__brand = "TroyHub"
+		end
+		return blob
+	end
+
+	function ConfigX.reload()
+		if Hub.Config and Hub.Config.autoLoad then
+			pcall(Hub.Config.autoLoad)
+		end
+		if Hub.validateState then
+			Hub.validateState()
+		end
+	end
+
+	Hub.ConfigX = ConfigX
+	return Hub
+end
+    end)
+
+    def("gui", function()
+-- Shared GUI helpers: diagnostics snapshot, debug console, animation helpers,
+-- panic/safe/recovery. Widget factories stay in the runtime so they keep
+-- their Content / Theme closures.
+
+return function(Hub: any)
+	local Stats = Hub.Services.Stats
+	local Gui = {}
+
+	function Gui.animateHover(inst, hoverProps, restProps)
+		if not inst then
+			return
+		end
+		Hub.track(inst.MouseEnter:Connect(function()
+			Hub.tween(inst, hoverProps, 0.12)
+		end))
+		Hub.track(inst.MouseLeave:Connect(function()
+			Hub.tween(inst, restProps, 0.12)
+		end))
+	end
+
+	function Gui.clickSquish(button)
+		if not button then
+			return
+		end
+		Hub.track(button.MouseButton1Down:Connect(function()
+			Hub.tween(button, { Size = button.Size - UDim2.fromOffset(0, 2) }, 0.06)
+		end))
+		Hub.track(button.MouseButton1Up:Connect(function()
+			Hub.tween(button, { Size = button.Size + UDim2.fromOffset(0, 2) }, 0.08)
+		end))
+	end
+
+	function Gui.diagnostics(): { [string]: any }
+		local State = Hub.State
+		local ping = Hub.getPingMs and Hub.getPingMs() or 0
+		local fps = Hub.FrameRate and Hub.FrameRate.fps or 0
+		local jobs = Hub.Scheduler and Hub.Scheduler.snapshot and Hub.Scheduler.snapshot() or {}
+		local mem = 0
+		pcall(function()
+			mem = Stats:GetTotalMemoryUsageMb()
+		end)
+		return {
+			version = Hub.Version and Hub.Version.script or "?",
+			page = Hub.Flags.ActivePage,
+			fps = fps,
+			ping = ping,
+			memoryMb = mem,
+			jobs = Hub.Scheduler and Hub.Scheduler.count and Hub.Scheduler.count() or 0,
+			jobHealth = jobs,
+			features = Hub.FeatureManager and Hub.FeatureManager.active() or {},
+			signals = Hub.Connections and #Hub.Connections or 0,
+			lastError = Hub.Diagnostics and Hub.Diagnostics.LastError or "",
+			unloading = Hub.Flags.Unloading == true,
+			safe = State and State.SafeMode or false,
+			panic = State and State.PanicMode or false,
+		}
+	end
+
+	function Gui.panic()
+		local State = Hub.State
+		if State then
+			State.PanicMode = true
+			State.SafeMode = true
+		end
+		if Hub.FeatureManager then
+			Hub.FeatureManager.disableAll()
+		end
+		if Hub.Notifications then
+			Hub.Notifications.warn("Panic", "All features stopped")
+		end
+	end
+
+	function Gui.safeMode(on: boolean)
+		if Hub.State then
+			Hub.State.SafeMode = on
+		end
+		if on and Hub.FeatureManager then
+			for _, name in Hub.FeatureManager.list() do
+				local spec = Hub.FeatureManager.get(name)
+				if spec and spec.safe == false and Hub.FeatureManager.isEnabled(name) then
+					Hub.FeatureManager.set(name, false, false)
+				end
+			end
+		end
+	end
+
+	function Gui.recovery()
+		if Hub.Flags.Unloading then
+			return
+		end
+		if Hub.State then
+			Hub.State.PanicMode = false
+		end
+		if Hub.ScreenGui then
+			Hub.ScreenGui.Enabled = true
+		end
+		if Hub.Notifications then
+			Hub.Notifications.success("Recovery", "UI restored")
+		end
+	end
+
+	local COMMANDS = {
+		help = function()
+			return "help, toggle, reload, reset, debug, dump, clear, panic, safe, recovery, profile"
+		end,
+		toggle = function(name)
+			if not name or not Hub.FeatureManager then
+				return "usage: /toggle <feature>"
+			end
+			local on = not Hub.FeatureManager.isEnabled(name)
+			Hub.FeatureManager.set(name, on, true)
+			return name .. " " .. (on and "on" or "off")
+		end,
+		reload = function()
+			if Hub.ConfigX then
+				Hub.ConfigX.reload()
+			end
+			return "config reloaded"
+		end,
+		reset = function()
+			if Hub.FarmStats then
+				Hub.FarmStats.reset()
+			end
+			return "stats reset"
+		end,
+		debug = function(arg)
+			if Hub.State then
+				Hub.State.DebugMode = arg ~= "off"
+			end
+			return "debug " .. tostring(Hub.State and Hub.State.DebugMode)
+		end,
+		dump = function()
+			local snap = Gui.diagnostics()
+			return string.format("v%s fps=%.0f ping=%d jobs=%s features=%d",
+				tostring(snap.version), snap.fps, snap.ping, tostring(snap.jobs),
+				snap.features and #snap.features or 0)
+		end,
+		clear = function()
+			if Hub.State then
+				table.clear(Hub.State._debugLog)
+			end
+			return "logs cleared"
+		end,
+		panic = function()
+			Gui.panic()
+			return "panic"
+		end,
+		safe = function()
+			Gui.safeMode(true)
+			return "safe mode"
+		end,
+		recovery = function()
+			Gui.recovery()
+			return "recovery"
+		end,
+		profile = function(name)
+			if Hub.ConfigX and name then
+				Hub.ConfigX.applyProfile(name, true)
+				return "profile " .. name
+			end
+			return "usage: /profile aggressive|balanced|stealth|low-resource|mobile|high-precision"
+		end,
+	}
+
+	function Gui.runCommand(line: string): string
+		local text = string.gsub(line, "^%s*/", "")
+		local cmd, rest = string.match(text, "^(%S+)%s*(.*)$")
+		if not cmd then
+			return ""
+		end
+		local fn = COMMANDS[string.lower(cmd)]
+		if not fn then
+			return "unknown command"
+		end
+		local ok, result = pcall(fn, rest ~= "" and rest or nil)
+		if not ok then
+			return tostring(result)
+		end
+		return tostring(result or "ok")
+	end
+
+	Hub.Gui = Gui
+	Hub.panic = Gui.panic
+	Hub.safeMode = Gui.safeMode
+	Hub.recovery = Gui.recovery
+	return Hub
+end
+    end)
+
+    def("features/movement", function()
+-- FeatureTemplate for Fly / Noclip / InfiniteJump / WalkSpeed.
+
+return function(Hub: any)
+	local FM = Hub.FeatureManager
+	if not FM then
+		return Hub
+	end
+
+	FM.register({
+		name = "Fly",
+		stateKey = "Fly",
+		safe = false,
+		getEnabled = function()
+			return Hub.State.Fly == true
+		end,
+		setEnabled = function(on)
+			if Hub.Features and Hub.Features.setFly then
+				Hub.Features.setFly(on)
+			end
+		end,
+		cleanup = function()
+			if Hub.hooks.flightCleanup then
+				Hub.hooks.flightCleanup()
+			end
+		end,
+	})
+
+	FM.register({
+		name = "Noclip",
+		stateKey = "Noclip",
+		safe = false,
+		getEnabled = function()
+			return Hub.State.Noclip == true
+		end,
+		setEnabled = function(on)
+			if Hub.Features and Hub.Features.setNoclip then
+				Hub.Features.setNoclip(on)
+			end
+		end,
+		cleanup = function()
+			if Hub.hooks.noclipCleanup then
+				Hub.hooks.noclipCleanup()
+			end
+		end,
+	})
+
+	FM.register({
+		name = "InfiniteJump",
+		stateKey = "InfiniteJump",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.InfiniteJump == true
+		end,
+		setEnabled = function(on)
+			if Hub.Features and Hub.Features.setInfiniteJump then
+				Hub.Features.setInfiniteJump(on)
+			end
+		end,
+		cleanup = function()
+			if Hub.hooks.infJumpCleanup then
+				Hub.hooks.infJumpCleanup()
+			end
+		end,
+	})
+
+	FM.register({
+		name = "WalkSpeed",
+		stateKey = "EnableWalkSpeed",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.EnableWalkSpeed == true
+		end,
+		setEnabled = function(on)
+			Hub.State.EnableWalkSpeed = on
+			local hum = Hub.getHumanoid and Hub.getHumanoid()
+			if hum and Hub.applyWalkSettings then
+				Hub.applyWalkSettings(hum)
+			end
+		end,
+		cleanup = function()
+			Hub.State.EnableWalkSpeed = false
+		end,
+	})
+
+	return Hub
+end
+    end)
+
+    def("features/utility", function()
+-- Fullbright, X-Ray, NoShadows, AntiAFK.
+
+return function(Hub: any)
+	local FM = Hub.FeatureManager
+	if not FM then
+		return Hub
+	end
+
+	FM.register({
+		name = "XRay",
+		stateKey = "XRay",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.XRay == true
+		end,
+		setEnabled = function(on)
+			if Hub.Features and Hub.Features.setXRay then
+				Hub.Features.setXRay(on)
+			end
+		end,
+		cleanup = function()
+			if Hub.hooks.xrayCleanup then
+				Hub.hooks.xrayCleanup()
+			end
+		end,
+	})
+
+	FM.register({
+		name = "Fullbright",
+		stateKey = "Fullbright",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.Fullbright == true
+		end,
+		setEnabled = function(on)
+			if Hub.Features and Hub.Features.setFullbright then
+				Hub.Features.setFullbright(on)
+			end
+		end,
+		cleanup = function()
+			if Hub.hooks.fullbrightCleanup then
+				Hub.hooks.fullbrightCleanup()
+			end
+		end,
+	})
+
+	FM.register({
+		name = "NoShadows",
+		stateKey = "NoShadows",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.NoShadows == true
+		end,
+		setEnabled = function(on)
+			if Hub.Features and Hub.Features.setNoShadows then
+				Hub.Features.setNoShadows(on)
+			end
+		end,
+	})
+
+	FM.register({
+		name = "AntiAFK",
+		stateKey = "AntiAFK",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.AntiAFK == true
+		end,
+		setEnabled = function(on)
+			Hub.State.AntiAFK = on
+		end,
+	})
+
+	return Hub
+end
+    end)
+
+    def("features/esp", function()
+-- ESP feature registration. Widget pooling lives in the runtime so grace /
+-- cap behaviour cannot drift from a second copy.
+
+return function(Hub: any)
+	local FM = Hub.FeatureManager
+	if not FM then
+		return Hub
+	end
+
+	FM.register({
+		name = "PlayerESP",
+		stateKey = "PlayerESP",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.PlayerESP == true
+		end,
+		setEnabled = function(on)
+			Hub.State.PlayerESP = on
+		end,
+	})
+
+	FM.register({
+		name = "ResourceESP",
+		stateKey = "ResourceESP",
+		safe = true,
+		getEnabled = function()
+			return Hub.State.ResourceESP == true
+		end,
+		setEnabled = function(on)
+			Hub.State.ResourceESP = on
+		end,
+	})
+
+	return Hub
+end
+    end)
+
+    def("features/combat", function()
+-- Combat feature registration. Aimbot implementation stays in the runtime
+-- so prediction / FOV math is not duplicated.
+
+return function(Hub: any)
+	local FM = Hub.FeatureManager
+	if not FM then
+		return Hub
+	end
+
+	FM.register({
+		name = "AimboT",
+		stateKey = "AimboT",
+		safe = false,
+		dependencies = {},
+		getEnabled = function()
+			return Hub.State.AimboT == true
+		end,
+		setEnabled = function(on)
+			Hub.State.AimboT = on
+			if not on and Hub.hooks.aimbotCleanup then
+				Hub.hooks.aimbotCleanup()
+			end
+		end,
+		cleanup = function()
+			if Hub.hooks.aimbotCleanup then
+				Hub.hooks.aimbotCleanup()
+			end
+		end,
+	})
+
+	return Hub
+end
+    end)
+
+    def("features/farming", function()
+-- Farm feature registration plus a selectable scoring helper the runtime
+-- can call without duplicating the live scanner.
+
+return function(Hub: any)
+	local FM = Hub.FeatureManager
+	local clampNum = Hub.clampNum
+
+	local Selector = {}
+
+	-- Lower is better. Distance is penalized with a mild curve so clustered
+	-- high-value nodes still beat a lone tree underfoot when PriorityWeight
+	-- is high, without letting a gold node 800 studs away win every time.
+	function Selector.score(dist: number, kind: string, opts: any?): number
+		local State = Hub.State
+		local weight = clampNum(State.PriorityWeight, 0, 200, 40)
+		local prioMap = State.ResourcePriority
+		local prio = 1
+		if type(prioMap) == "table" then
+			prio = tonumber(prioMap[kind]) or 1
+		end
+		local curve = 1.12
+		if opts and type(opts.curve) == "number" then
+			curve = opts.curve
+		end
+		local penalty = dist ^ curve
+		return penalty - (prio * weight)
+	end
+
+	Hub.Selector = Selector
+
+	if FM then
+		FM.register({
+			name = "AutoGather",
+			stateKey = "AutoGather",
+			safe = false,
+			getEnabled = function()
+				return Hub.State.AutoGather == true
+			end,
+			setEnabled = function(on)
+				Hub.State.AutoGather = on
+			end,
+		})
+		FM.register({
+			name = "TeleportGather",
+			stateKey = "TeleportGather",
+			safe = false,
+			getEnabled = function()
+				return Hub.State.TeleportGather == true
+			end,
+			setEnabled = function(on)
+				Hub.State.TeleportGather = on
+			end,
+		})
+		FM.register({
+			name = "GatherAround",
+			stateKey = "GatherAround",
+			safe = false,
+			getEnabled = function()
+				return Hub.State.GatherAround == true
+			end,
+			setEnabled = function(on)
+				Hub.State.GatherAround = on
+			end,
+		})
+		FM.register({
+			name = "LegitMode",
+			stateKey = "LegitMode",
+			safe = true,
+			getEnabled = function()
+				return Hub.State.LegitMode == true
+			end,
+			setEnabled = function(on)
+				Hub.State.LegitMode = on
+			end,
+		})
+	end
+
+	return Hub
+end
+    end)
+
+    local boot = (function()
+-- TroyHub entry. The bundler inlines every module above this file and
+-- provides import(name). Studio can swap import for require.
+
+return function(import: (string) -> any)
+	local Players = game:GetService("Players")
+	local UserInputService = game:GetService("UserInputService")
+	local RunService = game:GetService("RunService")
+	local TweenService = game:GetService("TweenService")
+	local ReplicatedStorage = game:GetService("ReplicatedStorage")
+	local Lighting = game:GetService("Lighting")
+	local TeleportService = game:GetService("TeleportService")
+	local Stats = game:GetService("Stats")
+	local HttpService = game:GetService("HttpService")
+	local GuiService = game:GetService("GuiService")
+	local ProximityPromptService = game:GetService("ProximityPromptService")
+
+	local player = Players.LocalPlayer
+	if not player then
+		Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+		player = Players.LocalPlayer
+	end
+	local playerGui = player:WaitForChild("PlayerGui")
+
+	-- Previous inject: deterministic unload first, then the guard.
+	pcall(function()
+		local prev = (shared :: any).TroyHub
+		if prev and type(prev.Unload) == "function" then
+			prev.Unload()
+		else
+			local raw = rawget(_G, "TroyHubUnload") or rawget(_G, "SamuraiHubUnload")
+			if typeof(raw) == "function" then
+				raw()
+			end
+		end
+	end)
+
+	if (shared :: any).TroyHubLoaded then
+		return
+	end
+	(shared :: any).TroyHubLoaded = true
+
+	local Hub: any = {
+		Flags = {
+			Unloading = false,
+			keybindCapturing = false,
+			ActivePage = "Dashboard",
+			StartedAt = os.clock(),
+		},
+		Diagnostics = {},
+		hooks = {},
+		PageHooks = {},
+		FrameRate = { fps = 60 },
+		player = player,
+		playerGui = playerGui,
+		Services = {
+			Players = Players,
+			UserInputService = UserInputService,
+			RunService = RunService,
+			TweenService = TweenService,
+			ReplicatedStorage = ReplicatedStorage,
+			Lighting = Lighting,
+			TeleportService = TeleportService,
+			Stats = Stats,
+			HttpService = HttpService,
+			GuiService = GuiService,
+			ProximityPromptService = ProximityPromptService,
+		},
+	}
+
+	local function load(name: string)
+		local factory = import(name)
+		if type(factory) ~= "function" then
+			error("TroyHub module '" .. name .. "' did not return a factory")
+		end
+		factory(Hub)
+	end
+
+	load("utils")
+	load("logger")
+	load("data")
+	load("state")
+	load("theme")
+	load("cleanup")
+	load("scheduler")
+	load("featureManager")
+	load("hotkeys")
+
+	Hub.Scheduler.start()
+	Hub.Scheduler.add("framerate", "render", 0, function(dt)
+		if dt > 0 then
+			Hub.FrameRate.fps = Hub.FrameRate.fps * 0.9 + (1 / dt) * 0.1
+		end
+	end, { priority = 1, budget = 0.002 })
+
+	load("app")
+	load("config")
+	load("gui")
+	load("features/movement")
+	load("features/utility")
+	load("features/esp")
+	load("features/combat")
+	load("features/farming")
+
+	if Hub.FEATURE_SETTERS then
+		Hub.FeatureManager.adoptSetters(Hub.FEATURE_SETTERS, Hub.toggleSync)
+	end
+	if Hub.Hotkeys then
+		pcall(function()
+			Hub.Hotkeys.adoptState()
+		end)
+	end
+
+	Hub.bindGlobals()
+	Hub.installKillSwitch()
+
+	if Hub.log then
+		local n = 0
+		pcall(function()
+			if Hub.ResourceScanner then
+				n = Hub.ResourceScanner.count()
+			end
+		end)
+		Hub.log(string.format("v%s ready  ·  %d nodes indexed", Hub.Version.script, n))
+	end
+
+	return Hub
+end
+    end)()
+    boot(import)
+end
+__troyDefPack()
