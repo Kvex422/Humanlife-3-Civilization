@@ -49,11 +49,6 @@ return function(Hub: any)
     local cancelMoveTween
     local unlockMovement
     local clearNodeOffsets
-    local flightCleanup
-    local noclipCleanup
-    local infJumpCleanup
-    local fullbrightCleanup
-    local xrayCleanup
     local aimbotCleanup
     local fovCircleGui, fovCircle
 
@@ -67,22 +62,26 @@ Scheduler.add("farmclock", "logic", 1, function()
     end
 end)
 
-local function applyWalkSettings(hum: Humanoid)
-    hum.UseJumpPower = true
-    hum.JumpPower = clampNum(State.JumpPower, 0, 500, 50)
-    if not State.EnableWalkSpeed then
-        hum.WalkSpeed = 16
-        return
+    local applyWalkSettings = Hub.applyWalkSettings
+    if not applyWalkSettings then
+        applyWalkSettings = function(hum: Humanoid)
+            hum.UseJumpPower = true
+            hum.JumpPower = clampNum(State.JumpPower, 0, 500, 50)
+            if not State.EnableWalkSpeed then
+                hum.WalkSpeed = 16
+                return
+            end
+            local method = State.WalkSpeedMethod
+            if method == "Rigid" then
+                hum.WalkSpeed = 0
+            elseif method == "Boost" then
+                hum.WalkSpeed = 16
+            else
+                hum.WalkSpeed = clampNum(State.WalkSpeed, 0, 500, 40)
+            end
+        end
+        Hub.applyWalkSettings = applyWalkSettings
     end
-    local method = State.WalkSpeedMethod
-    if method == "Rigid" then
-        hum.WalkSpeed = 0
-    elseif method == "Boost" then
-        hum.WalkSpeed = 16
-    else
-        hum.WalkSpeed = clampNum(State.WalkSpeed, 0, 500, 40)
-    end
-end
 
 -- ============================================================
 --  ROOT GUI
@@ -162,7 +161,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.3",
+    Text = "Humanlife 3: Civilization   ·   2.0.4",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -365,749 +364,24 @@ do
 end
 
 -- ============================================================
---  TOGGLEABLE FEATURES
+--  FEATURE TOGGLES (Registry is the only door)
 -- ============================================================
 local toggleSync = {}
+Hub.toggleSync = toggleSync
 local keybindCapturing = false
-local Features = {}
-
-function Features.setInfiniteJump(on: boolean)
-    State.InfiniteJump = on
-    if infJumpCleanup then infJumpCleanup(); infJumpCleanup = nil end
-    if not on then return end
-    local conn = UserInputService.JumpRequest:Connect(function()
-        if Flags.Unloading or not State.InfiniteJump then return end
-        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum and hum:IsA("Humanoid") then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
-    end)
-    track(conn)
-    infJumpCleanup = function() pcall(function() conn:Disconnect() end) end
-end
-
-function Features.setFly(on: boolean)
-    State.Fly = on
-    if flightCleanup then flightCleanup(); flightCleanup = nil end
-    if not on then return end
-    local bodyVelocity, bodyGyro
-    Scheduler.add("fly", "render", 0, function()
-        if Flags.Unloading or not State.Fly then return end
-        -- Leftover BodyVelocity/Gyro will fight Auto Gather CFrame flight
-        -- and cancel hits. Tear them down while the farm is flying.
-        if State.TeleportGather or (State.AutoGather and not State.LegitMode) then
-            if bodyVelocity then pcall(function() bodyVelocity:Destroy() end) bodyVelocity = nil end
-            if bodyGyro then pcall(function() bodyGyro:Destroy() end) bodyGyro = nil end
-            return
-        end
-        local char = player.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        if not root or not root:IsA("BasePart") then return end
-        if not bodyVelocity or not bodyVelocity.Parent then
-            bodyVelocity = Instance.new("BodyVelocity")
-            bodyVelocity.MaxForce = Vector3.new(9e9, 9e9, 9e9)
-            bodyVelocity.Velocity = Vector3.zero
-            bodyVelocity.Parent = root
-            bodyGyro = Instance.new("BodyGyro")
-            bodyGyro.MaxTorque = Vector3.new(9e9, 9e9, 9e9)
-            bodyGyro.CFrame = root.CFrame
-            bodyGyro.Parent = root
-        end
-        local cam = workspace.CurrentCamera
-        if not cam then return end
-        local camCF = cam.CFrame
-        local dir = Vector3.zero
-        if isKeyDown(Enum.KeyCode.W) then dir += camCF.LookVector end
-        if isKeyDown(Enum.KeyCode.S) then dir -= camCF.LookVector end
-        if isKeyDown(Enum.KeyCode.A) then dir -= camCF.RightVector end
-        if isKeyDown(Enum.KeyCode.D) then dir += camCF.RightVector end
-        if isKeyDown(Enum.KeyCode.Space) then dir += Vector3.new(0, 1, 0) end
-        if isKeyDown(Enum.KeyCode.LeftControl) then dir -= Vector3.new(0, 1, 0) end
-        local flySpeed = clampNum(State.FlySpeed, 1, 500, 100)
-        bodyVelocity.Velocity = dir.Magnitude > 0 and dir.Unit * flySpeed or Vector3.zero
-        bodyGyro.CFrame = camCF
-    end)
-    flightCleanup = function()
-        Scheduler.remove("fly")
-        if bodyVelocity then pcall(function() bodyVelocity:Destroy() end) end
-        if bodyGyro then pcall(function() bodyGyro:Destroy() end) end
-        bodyVelocity, bodyGyro = nil, nil
-    end
-end
-
--- Noclip only touches the player's own character now, and everything it
--- changed is restored when it turns off. Previously it kept a session-long
--- table of every collision part in the workspace, and when it turned back
--- off it re-enabled collision on those — including plot parts you were
--- trying to build with.
-function Features.setNoclip(on: boolean)
-    State.Noclip = on
-    if noclipCleanup then noclipCleanup(); noclipCleanup = nil end
-    if not on then return end
-    local restore = {}
-    local cached: { BasePart } = {}
-    local charRef: Model? = nil
-    local addedConn: RBXScriptConnection? = nil
-
-    local function rescan(char: Model)
-        table.clear(cached)
-        charRef = char
-        for _, p in char:GetChildren() do
-            if p:IsA("BasePart") then
-                table.insert(cached, p)
-            end
-        end
-        if addedConn then pcall(function() (addedConn :: RBXScriptConnection):Disconnect() end) end
-        addedConn = char.ChildAdded:Connect(function(child)
-            if child:IsA("BasePart") then
-                table.insert(cached, child)
-            end
-        end)
-        track(addedConn)
-    end
-
-    Scheduler.add("noclip", "logic", 0, function()
-        if Flags.Unloading or not State.Noclip then return end
-        local char = player.Character
-        if not char then return end
-        if char ~= charRef then rescan(char) end
-        for _, p in cached do
-            if p.Parent and p.CanCollide then
-                restore[p] = true
-                p.CanCollide = false
-            end
-        end
-    end)
-    noclipCleanup = function()
-        Scheduler.remove("noclip")
-        if addedConn then pcall(function() (addedConn :: RBXScriptConnection):Disconnect() end) end
-        addedConn = nil
-        for p in restore do
-            if p.Parent and p:IsDescendantOf(player.Character or player) then
-                pcall(function() p.CanCollide = true end)
-            end
-        end
-        table.clear(restore)
-        table.clear(cached)
-        charRef = nil
-    end
-end
-
--- Radius query around the camera instead of workspace:GetDescendants(), which
--- walked the whole 10k-part tree four times a second. Parts that fall out of
--- range are turned back opaque — they used to stay ghosted until you toggled
--- X-Ray off, and the touched table grew for the whole session.
-local XRAY_RANGE = 300
-function Features.setXRay(on: boolean)
-    State.XRay = on
-    if xrayCleanup then xrayCleanup(); xrayCleanup = nil end
-    if not on then return end
-    local touched = {}
-    local inRange = {}
-    local params = OverlapParams.new()
-    params.FilterType = Enum.RaycastFilterType.Exclude
-    params.MaxParts = 500
-    Scheduler.add("xray", "logic", 0.3, function()
-        if Flags.Unloading or not State.XRay then return end
-        local cam = workspace.CurrentCamera
-        if not cam then return end
-        local char = player.Character
-        local camPos = cam.CFrame.Position
-        params.FilterDescendantsInstances = char and { char } or {}
-        local ok, parts = pcall(function()
-            return workspace:GetPartBoundsInRadius(camPos, XRAY_RANGE, params)
-        end)
-        if not ok or not parts then return end
-
-        table.clear(inRange)
-        for _, d in parts do
-            if not d:IsA("BasePart") then continue end
-            -- Skip anything small (props, prompts, placed parts) and anything
-            -- right on top of the camera.
-            if d.Size.Magnitude <= 6 then continue end
-            if (d.Position - camPos).Magnitude <= 3 then continue end
-            inRange[d] = true
-            if not touched[d] then
-                touched[d] = d.LocalTransparencyModifier
-            end
-            d.LocalTransparencyModifier = 0.7
-        end
-
-        for p, original in touched do
-            if not inRange[p] then
-                if p.Parent then
-                    pcall(function() p.LocalTransparencyModifier = original end)
-                end
-                touched[p] = nil
-            end
-        end
-    end)
-    xrayCleanup = function()
-        Scheduler.remove("xray")
-        for p, original in touched do
-            if p.Parent then pcall(function() p.LocalTransparencyModifier = original end) end
-        end
-        table.clear(touched)
-        table.clear(inRange)
-    end
-end
-
--- The game writes ClockTime / Ambient / fog every frame. Thresholded writes
--- lost that fight: the day-cycle would land just inside EPS, we would skip,
--- and the world flickered dark. Force the values every late RenderStep and
--- every Heartbeat, and keep Atmosphere / PostEffects dead the same way.
-local LIGHT_BIND = "TroyHubLighting"
-local lightingBound = false
-local lightingPropConns = {}
-local lightingApplying = false
-local fbSaved = nil
-local fxSaved = {}
-
-local function unbindLightingStep()
-    Scheduler.remove("lighting")
-    for _, c in lightingPropConns do
-        pcall(function() c:Disconnect() end)
-    end
-    table.clear(lightingPropConns)
-    pcall(function() RunService:UnbindFromRenderStep(LIGHT_BIND) end)
-    pcall(function() RunService:UnbindFromRenderStep("TroyHubLighting") end)
-    lightingBound = false
-end
-
-local function restoreTamedEffects()
-    for inst, props in fxSaved do
-        if inst.Parent then
-            pcall(function()
-                for k, v in props do
-                    inst[k] = v
-                end
-            end)
-        end
-    end
-    table.clear(fxSaved)
-end
-
-local function restoreFullbrightSaved()
-    local saved = fbSaved
-    fbSaved = nil
-    restoreTamedEffects()
-    if not saved then return end
-    pcall(function()
-        Lighting.Ambient = saved.Ambient
-        Lighting.OutdoorAmbient = saved.OutdoorAmbient
-        Lighting.Brightness = saved.Brightness
-        Lighting.ClockTime = saved.ClockTime
-        Lighting.FogEnd = saved.FogEnd
-        Lighting.FogStart = saved.FogStart
-        Lighting.FogColor = saved.FogColor
-        Lighting.GlobalShadows = saved.GlobalShadows
-        Lighting.ExposureCompensation = saved.Exposure
-        Lighting.ColorShift_Top = saved.ColorShiftTop
-        Lighting.ColorShift_Bottom = saved.ColorShiftBottom
-        if saved.EnvDiff ~= nil then Lighting.EnvironmentDiffuseScale = saved.EnvDiff end
-        if saved.EnvSpec ~= nil then Lighting.EnvironmentSpecularScale = saved.EnvSpec end
-        if saved.Clouds and saved.Clouds.inst and saved.Clouds.inst.Parent then
-            saved.Clouds.inst.Cover = saved.Clouds.Cover
-            saved.Clouds.inst.Density = saved.Clouds.Density
-        end
-    end)
-    if State.NoShadows then
-        Lighting.GlobalShadows = false
-    end
-end
-
-local function rememberFx(inst: Instance, props: { [string]: any })
-    if fxSaved[inst] then return end
-    local snap = {}
-    for k in props do
-        local ok, v = pcall(function() return (inst :: any)[k] end)
-        if ok then snap[k] = v end
-    end
-    fxSaved[inst] = snap
-end
-
-local function killAtmosphere(atmo: Atmosphere)
-    rememberFx(atmo, { Density = true, Haze = true, Glare = true, Offset = true })
-    atmo.Density = 0
-    atmo.Haze = 0
-    atmo.Glare = 0
-    pcall(function() atmo.Offset = 0 end)
-end
-
-local function killPostEffect(inst: Instance)
-    if not inst:IsA("PostEffect") then return end
-    rememberFx(inst, { Enabled = true })
-    inst.Enabled = false
-end
-
-local function killClouds(clouds: Instance)
-    rememberFx(clouds, { Cover = true, Density = true, Enabled = true })
-    pcall(function()
-        (clouds :: any).Cover = 0
-        (clouds :: any).Density = 0
-        if (clouds :: any).Enabled ~= nil then
-            (clouds :: any).Enabled = false
-        end
-    end)
-end
-
-local function tameLightingChild(inst: Instance)
-    if inst:IsA("Atmosphere") then
-        killAtmosphere(inst)
-    elseif inst:IsA("PostEffect") then
-        killPostEffect(inst)
-    end
-end
-
-local FB_WHITE = Color3.new(1, 1, 1)
-local FB_AMBIENT = Color3.fromRGB(210, 210, 210)
-
-local function applyFullbrightFrame()
-    if lightingApplying then return end
-    lightingApplying = true
-    local L = Lighting
-    -- Unconditional writes. The game's day/night script always runs; we have
-    -- to land after it, not debate whether the value is "close enough".
-    L.ClockTime = 12.5
-    L.Brightness = 2
-    L.Ambient = FB_AMBIENT
-    L.OutdoorAmbient = FB_WHITE
-    L.FogStart = 1e5
-    L.FogEnd = 1e6
-    L.FogColor = FB_WHITE
-    L.GlobalShadows = false
-    L.ColorShift_Top = FB_WHITE
-    L.ColorShift_Bottom = FB_WHITE
-    pcall(function() L.ExposureCompensation = 0 end)
-    pcall(function() L.EnvironmentDiffuseScale = 0 end)
-    pcall(function() L.EnvironmentSpecularScale = 0 end)
-    pcall(function() L.ShadowSoftness = 0 end)
-
-    local atmo = L:FindFirstChildOfClass("Atmosphere")
-    if atmo then killAtmosphere(atmo) end
-    for _, inst in L:GetChildren() do
-        if inst:IsA("PostEffect") then
-            killPostEffect(inst)
-        elseif inst:IsA("Atmosphere") then
-            killAtmosphere(inst)
-        end
-    end
-    local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds")
-    if clouds then killClouds(clouds) end
-    lightingApplying = false
-end
-
-local function lightingStep()
-    if Flags.Unloading then return end
-    if State.Fullbright then
-        applyFullbrightFrame()
-    elseif State.NoShadows then
-        Lighting.GlobalShadows = false
-    end
-end
-
-local function bindLightingStep()
-    if lightingBound or Flags.Unloading then return end
-    lightingBound = true
-    pcall(function() RunService:UnbindFromRenderStep(LIGHT_BIND) end)
-    -- Last+100 sits after the game's own Last bind. Heartbeat covers the
-    -- frames where a lighting script runs after RenderStep.
-    Scheduler.add("lighting", "logic", 0, lightingStep)
-    pcall(function()
-        RunService:BindToRenderStep(LIGHT_BIND, Enum.RenderPriority.Last.Value + 100, lightingStep)
-    end)
-    table.insert(lightingPropConns, Lighting.ChildAdded:Connect(function(inst)
-        if Flags.Unloading or not State.Fullbright then return end
-        tameLightingChild(inst)
-    end))
-end
-
-local function syncLightingBind()
-    if State.Fullbright or State.NoShadows then
-        bindLightingStep()
-    else
-        unbindLightingStep()
-    end
-end
-
-function Features.setFullbright(on: boolean)
-    State.Fullbright = on
-    if on then
-        if not fbSaved then
-            local clouds = workspace.Terrain:FindFirstChildOfClass("Clouds")
-            fbSaved = {
-                Ambient = Lighting.Ambient,
-                OutdoorAmbient = Lighting.OutdoorAmbient,
-                Brightness = Lighting.Brightness,
-                ClockTime = Lighting.ClockTime,
-                FogEnd = Lighting.FogEnd,
-                FogStart = Lighting.FogStart,
-                FogColor = Lighting.FogColor,
-                GlobalShadows = Lighting.GlobalShadows,
-                Exposure = Lighting.ExposureCompensation,
-                ColorShiftTop = Lighting.ColorShift_Top,
-                ColorShiftBottom = Lighting.ColorShift_Bottom,
-                EnvDiff = Lighting.EnvironmentDiffuseScale,
-                EnvSpec = Lighting.EnvironmentSpecularScale,
-                Clouds = clouds and { inst = clouds, Cover = clouds.Cover, Density = clouds.Density } or nil,
-            }
-        end
-        applyFullbrightFrame()
-        bindLightingStep()
-        fullbrightCleanup = function()
-            restoreFullbrightSaved()
-            unbindLightingStep()
-            if not Flags.Unloading and State.NoShadows then
-                Lighting.GlobalShadows = false
-                bindLightingStep()
-            end
-        end
-    else
-        restoreFullbrightSaved()
-        if State.NoShadows then
-            Lighting.GlobalShadows = false
-            bindLightingStep()
-            fullbrightCleanup = function()
-                unbindLightingStep()
-            end
-        else
-            fullbrightCleanup = nil
-            unbindLightingStep()
-        end
-    end
-end
-
-function Features.setNoShadows(on: boolean)
-    State.NoShadows = on
-    if on then
-        Lighting.GlobalShadows = false
-        bindLightingStep()
-        if not fullbrightCleanup then
-            fullbrightCleanup = function()
-                restoreFullbrightSaved()
-                unbindLightingStep()
-            end
-        end
-    else
-        if not State.Fullbright then
-            Lighting.GlobalShadows = EnvDefaults.GlobalShadows
-            unbindLightingStep()
-            if not fbSaved then fullbrightCleanup = nil end
-        end
-    end
-end
-
-local FEATURE_SETTERS = {
-    Fly = Features.setFly,
-    Noclip = Features.setNoclip,
-    InfiniteJump = Features.setInfiniteJump,
-    XRay = Features.setXRay,
-    Fullbright = Features.setFullbright,
-    NoShadows = Features.setNoShadows,
-}
 
 local function setFeature(name: string, on: boolean, notify: boolean?)
-    if Hub.FeatureManager and Hub.FeatureManager.get(name) then
-        Hub.FeatureManager.set(name, on, notify)
+    if not Hub.Registry then
         return
     end
-    local setter = FEATURE_SETTERS[name]
-    if not setter then return end
-    setter(on)
-    local sync = toggleSync[name]
-    if sync then sync(on) end
-    if notify then
-        Notifications.info(name, on and "Enabled" or "Disabled")
+    if on then
+        Hub.Registry.enable(name, notify)
+    else
+        Hub.Registry.disable(name, notify)
     end
 end
 
--- ============================================================
---  CONFIG SAVE / LOAD
---  State is walked automatically rather than listed field by field, so a new
---  setting is persisted the moment it is added to State. Anything the
---  serializer does not recognise (runtime handles, caches, _prefixed keys) is
---  skipped instead of guessed at.
--- ============================================================
 local rerenderCurrentPage: (() -> ())? = nil
-
-local Config = {}
-do
-    local FILE = "TroyHub_config.json"
-    local LEGACY_FILE = "SamuraiHub_config.json"
-
-    local function enumToString(v: EnumItem): string
-        return tostring(v)
-    end
-
-    local function enumFromString(s: string): EnumItem?
-        local class, name = string.match(s, "^Enum%.([%w_]+)%.([%w_]+)$")
-        if not class or not name then return nil end
-        local ok, item = pcall(function()
-            return (Enum :: any)[class][name]
-        end)
-        if ok and typeof(item) == "EnumItem" then return item end
-        return nil
-    end
-
-    local function encodeValue(v: any): any
-        local t = typeof(v)
-        if t == "boolean" or t == "number" or t == "string" then
-            return v
-        end
-        if t == "EnumItem" then
-            return { __kind = "enum", v = enumToString(v) }
-        end
-        if t == "Color3" then
-            return { __kind = "color", r = v.R, g = v.G, b = v.B }
-        end
-        if t == "table" then
-            -- Flat string-keyed maps of a single scalar type: the resource
-            -- filters (booleans) and the priority table (numbers).
-            local out = {}
-            local kind: string? = nil
-            for k, sub in v do
-                local st = type(sub)
-                if type(k) ~= "string" or (st ~= "boolean" and st ~= "number") then
-                    return nil
-                end
-                if kind and kind ~= st then return nil end
-                kind = st
-                out[k] = sub
-            end
-            if kind == "boolean" then return { __kind = "flags", v = out } end
-            if kind == "number" then return { __kind = "nums", v = out } end
-        end
-        return nil
-    end
-
-    local function decodeValue(stored: any, current: any): any
-        local ct = typeof(current)
-        if type(stored) ~= "table" then
-            -- Refuse a type change; a corrupted file should not turn a number
-            -- setting into a string and break every range comparison.
-            if typeof(stored) == ct then return stored end
-            return nil
-        end
-        if stored.__kind == "enum" and ct == "EnumItem" then
-            local item = enumFromString(tostring(stored.v))
-            if item and item.EnumType == current.EnumType then return item end
-            return nil
-        end
-        if stored.__kind == "color" and ct == "Color3" then
-            return Color3.new(
-                math.clamp(tonumber(stored.r) or 0, 0, 1),
-                math.clamp(tonumber(stored.g) or 0, 0, 1),
-                math.clamp(tonumber(stored.b) or 0, 0, 1))
-        end
-        if stored.__kind == "flags" and ct == "table" then
-            local out = {}
-            for k, existing in current do
-                local incoming = (stored.v or {})[k]
-                out[k] = if type(incoming) == "boolean" then incoming else existing
-            end
-            return out
-        end
-        if stored.__kind == "nums" and ct == "table" then
-            local out = {}
-            for k, existing in current do
-                local incoming = (stored.v or {})[k]
-                out[k] = if type(incoming) == "number" and incoming == incoming
-                    then math.clamp(incoming, 0, 100) else existing
-            end
-            return out
-        end
-        return nil
-    end
-
-    -- Captured before any UI exists, so "Reset All" really does restore the
-    -- shipped defaults rather than whatever was loaded from disk.
-    local defaults = {}
-    for key, value in State do
-        if string.sub(key, 1, 1) ~= "_" then
-            local enc = encodeValue(value)
-            if enc ~= nil then defaults[key] = enc end
-        end
-    end
-
-    function Config.serialize(): string?
-        local payload = { version = 1, saved = os.time(), state = {} }
-        for key, value in State do
-            if string.sub(key, 1, 1) ~= "_" then
-                local enc = encodeValue(value)
-                if enc ~= nil then payload.state[key] = enc end
-            end
-        end
-        local ok, text = pcall(function()
-            return HttpService:JSONEncode(payload)
-        end)
-        if ok and type(text) == "string" then return text end
-        return nil
-    end
-
-    -- Applies a decoded state table onto State, then pushes the values that
-    -- live outside State (lighting, camera, gravity, running loops) so the
-    -- game matches the file without needing a rejoin.
-    function Config.applyTable(incoming: any): number
-        if type(incoming) ~= "table" then return 0 end
-        local applied = 0
-        for key, stored in incoming do
-            local current = State[key]
-            if current ~= nil and string.sub(key, 1, 1) ~= "_" then
-                local value = decodeValue(stored, current)
-                if value ~= nil then
-                    State[key] = value
-                    applied += 1
-                end
-            end
-        end
-        for name, setter in FEATURE_SETTERS do
-            pcall(setter, State[name] == true)
-            local sync = toggleSync[name]
-            if sync then pcall(sync, State[name] == true) end
-        end
-        pcall(function()
-            Features.setNoShadows(State.NoShadows == true)
-            workspace.Gravity = clampNum(State.Gravity, 0, 1000, EnvDefaults.Gravity)
-            player.CameraMaxZoomDistance = clampNum(State.CamZoom, 0.5, 5000, EnvDefaults.CameraZoom)
-            local cam = workspace.CurrentCamera
-            if cam then cam.FieldOfView = clampNum(State.FOV, 1, 120, EnvDefaults.FieldOfView) end
-            local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-            if hum and hum:IsA("Humanoid") then applyWalkSettings(hum) end
-            -- Old ice/violet saves would paint the new Troy UI blue again.
-            local a = State.ThemeAccent
-            if typeof(a) == "Color3" and a.B > 0.65 and a.B > a.R + 0.1 then
-                State.ThemeAccent = Theme.Accent
-                State.ThemeAccent2 = Theme.Accent2
-                State.FOVColor = Theme.Accent
-            end
-        end)
-        -- Deferred: this is usually reached from a button on the very page
-        -- about to be rebuilt, and destroying a widget inside its own click
-        -- handler is asking for trouble.
-        task.defer(function()
-            if rerenderCurrentPage and not Flags.Unloading then pcall(rerenderCurrentPage) end
-        end)
-        return applied
-    end
-
-    function Config.deserialize(text: string): number
-        local ok, payload = pcall(function()
-            return HttpService:JSONDecode(text)
-        end)
-        if not ok or type(payload) ~= "table" then
-            Notifications.warn("Config", "File is not valid JSON")
-            return 0
-        end
-        return Config.applyTable(payload.state or payload)
-    end
-
-    function Config.save(): boolean
-        local text = Config.serialize()
-        if not text then
-            Notifications.warn("Config", "Could not encode settings")
-            return false
-        end
-        local writer = rawget(_G, "writefile")
-        if type(writer) == "function" then
-            local ok = pcall(writer, FILE, text)
-            if ok then
-                Notifications.success("Config", "Saved to " .. FILE)
-                return true
-            end
-        end
-        local clip = rawget(_G, "setclipboard")
-        if type(clip) == "function" then
-            pcall(clip, text)
-            Notifications.info("Config", "No file access — copied to clipboard")
-            return true
-        end
-        Notifications.warn("Config", "No file or clipboard access")
-        return false
-    end
-
-    function Config.load(): boolean
-        local reader = rawget(_G, "readfile")
-        local exists = rawget(_G, "isfile")
-        if type(reader) ~= "function" then
-            Notifications.warn("Config", "Executor has no readfile")
-            return false
-        end
-        local function tryRead(path: string): string?
-            if type(exists) == "function" then
-                local ok, present = pcall(exists, path)
-                if ok and not present then return nil end
-            end
-            local read, text = pcall(reader, path)
-            if read and type(text) == "string" then return text end
-            return nil
-        end
-        local text = tryRead(FILE) or tryRead(LEGACY_FILE)
-        if not text then
-            Notifications.info("Config", "No saved config yet")
-            return false
-        end
-        local applied = Config.deserialize(text)
-        if applied > 0 then
-            Notifications.success("Config", string.format("Loaded %d settings", applied))
-            return true
-        end
-        return false
-    end
-
-    -- Silent variant for startup: absent config is the normal case, not a
-    -- problem worth a toast.
-    function Config.autoLoad()
-        local reader = rawget(_G, "readfile")
-        local exists = rawget(_G, "isfile")
-        if type(reader) ~= "function" then return end
-        local function tryRead(path: string): string?
-            if type(exists) == "function" then
-                local ok, present = pcall(exists, path)
-                if not ok or not present then return nil end
-            end
-            local read, text = pcall(reader, path)
-            if read and type(text) == "string" then return text end
-            return nil
-        end
-        local text = tryRead(FILE) or tryRead(LEGACY_FILE)
-        if not text then return end
-        local applied = Config.deserialize(text)
-        if applied > 0 then
-            log(string.format("config: restored %d settings", applied))
-        end
-    end
-
-    function Config.loadFromText(text: string): boolean
-        if type(text) ~= "string" or #text < 2 then
-            Notifications.warn("Config", "Paste a config first")
-            return false
-        end
-        local applied = Config.deserialize(text)
-        if applied > 0 then
-            Notifications.success("Config", string.format("Applied %d settings", applied))
-            return true
-        end
-        return false
-    end
-
-    function Config.resetAll()
-        Config.applyTable(defaults)
-        Notifications.success("Settings", "Restored shipped defaults")
-    end
-
-    function Config.fileName(): string
-        return FILE
-    end
-
-    function Config.delete()
-        local del = rawget(_G, "delfile")
-        if type(del) == "function" then
-            if pcall(del, FILE) then
-                Notifications.info("Config", "Deleted " .. FILE)
-                return
-            end
-        end
-        Notifications.warn("Config", "Could not delete saved config")
-    end
-end
 
 -- ============================================================
 --  STEALTH PROFILES
@@ -2178,9 +1452,9 @@ local function clearContent()
     clearPageScope()
     keybindCapturing = false
     table.clear(toggleSync)
-    State._statusLabel = nil
-    State._statusDot = nil
-    State._debugLabel = nil
+    Hub.Runtime.statusLabel = nil
+    Hub.Runtime.statusDot = nil
+    Hub.Runtime.debugLabel = nil
     for _, c in Content:GetChildren() do
         if c:IsA("GuiObject") then c:Destroy() end
     end
@@ -2207,13 +1481,14 @@ end
 local function navigateTo(name: string)
     if not Pages[name] then return end
     local prev = currentPage
-    if prev and prev ~= name and Hub.Pages and Hub.Pages.close then
-        pcall(function() Hub.Pages.close(prev) end)
+    local scope = Hub.PageScope or Hub.Pages
+    if prev and prev ~= name and scope and scope.close then
+        pcall(function() scope.close(prev) end)
     end
     selectNav(name)
     Hub.Flags.ActivePage = name
-    if Hub.Pages and Hub.Pages.open then
-        pcall(function() Hub.Pages.open(name) end)
+    if scope and scope.open then
+        pcall(function() scope.open(name) end)
     end
     Search.building = name
     local ok, err = pcall(Pages[name])
@@ -2229,6 +1504,11 @@ rerenderCurrentPage = function()
     local scroll = Content.CanvasPosition
     navigateTo(name)
     Content.CanvasPosition = scroll
+end
+Hub.rerenderCurrentPage = function()
+    if rerenderCurrentPage then
+        rerenderCurrentPage()
+    end
 end
 
 -- Builds the search index by rendering every page once into the same Content
@@ -2257,21 +1537,17 @@ Pages["Auto Gather"] = function()
     sectionTitle("Modes", y); y += 34
     local c1 = card(y, 282); y += 292
     local _, syncGather = toggleRow(c1, "Auto Gather  (teleport to each listed node and mine)", 14, State.AutoGather, function(v)
-        State.AutoGather = v
-        Notifications.info("Auto Gather", v and "Enabled" or "Disabled")
+        setFeature("AutoGather", v, true)
     end)
     toggleSync.AutoGather = syncGather
     toggleRow(c1, "Teleport Gather  (snap to each, mine all in range)", 52, State.TeleportGather, function(v)
-        State.TeleportGather = v
-        Notifications.info("Teleport Gather", v and "Enabled" or "Disabled")
+        setFeature("TeleportGather", v, true)
     end)
     toggleRow(c1, "Gather Around  (mine nearby while you walk)", 90, State.GatherAround, function(v)
-        State.GatherAround = v
-        Notifications.info("Gather Around", v and "Enabled" or "Disabled")
+        setFeature("GatherAround", v, true)
     end)
     toggleRow(c1, "Legit Gather  (walk up and farm like a player)", 128, State.LegitMode, function(v)
-        State.LegitMode = v
-        Notifications.info("Legit Gather", v and "Enabled" or "Disabled")
+        setFeature("LegitMode", v, true)
     end)
     sliderRow(c1, "Hit Delay", 166, 0.05, 3, State.HitGap, "s", function(v)
         State.HitGap = v
@@ -2485,7 +1761,7 @@ Pages["Auto Gather"] = function()
         BackgroundColor3 = Theme.Danger, BorderSizePixel = 0, Parent = c5,
     })
     corner(5, dot)
-    State._statusDot = dot
+    Hub.Runtime.statusDot = dot
     local statusLabel = new("TextLabel", {
         Size = UDim2.new(1, -60, 0, 40), Position = UDim2.fromOffset(44, 50),
         BackgroundTransparency = 1, Font = Theme.Font,
@@ -2493,7 +1769,7 @@ Pages["Auto Gather"] = function()
         TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = c5,
     })
-    State._statusLabel = statusLabel
+    Hub.Runtime.statusLabel = statusLabel
     y += 120
 
     sectionTitle("Debug Log", y); y += 34
@@ -2505,8 +1781,8 @@ Pages["Auto Gather"] = function()
         TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = c6,
     })
-    State._debugLabel = debugLabel
-    if #State._debugLog > 0 then debugLabel.Text = table.concat(State._debugLog, "\n") end
+    Hub.Runtime.debugLabel = debugLabel
+    if #Hub.Runtime.debugLog > 0 then debugLabel.Text = table.concat(Hub.Runtime.debugLog, "\n") end
 
     Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
 end
@@ -2519,8 +1795,7 @@ Pages["Visuals"] = function()
     sectionTitle("Player ESP", y); y += 30
     local c1 = card(y, 12 + 8 * 38 + 12); y += 12 + 8 * 38 + 20
     toggleRow(c1, "Player ESP", 12, State.PlayerESP, function(v)
-        State.PlayerESP = v
-        Notifications.info("Player ESP", v and "Enabled" or "Disabled")
+        setFeature("PlayerESP", v, true)
     end)
     toggleRow(c1, "Box", 50, State.PlayerBox, function(v) State.PlayerBox = v end)
     toggleRow(c1, "Name", 88, State.PlayerName, function(v) State.PlayerName = v end)
@@ -2532,8 +1807,7 @@ Pages["Visuals"] = function()
     sectionTitle("Resource ESP", y); y += 30
     local c2 = card(y, 12 + 8 * 38 + 12); y += 12 + 8 * 38 + 20
     toggleRow(c2, "Resource ESP", 12, State.ResourceESP, function(v)
-        State.ResourceESP = v
-        Notifications.info("Resource ESP", v and "Enabled" or "Disabled")
+        setFeature("ResourceESP", v, true)
     end)
     toggleRow(c2, "Box", 50, State.ResourceBox, function(v) State.ResourceBox = v end)
     toggleRow(c2, "Name", 88, State.ResourceName, function(v) State.ResourceName = v end)
@@ -2547,16 +1821,16 @@ Pages["Visuals"] = function()
     sectionTitle("Lighting", y); y += 30
     local c3 = card(y, 130); y += 140
     local _, syncFB = toggleRow(c3, "Fullbright", 14, State.Fullbright, function(v)
-        Features.setFullbright(v)
+        setFeature("Fullbright", v)
         Notifications.info("Fullbright", v and "Enabled" or "Disabled")
     end)
     toggleSync.Fullbright = syncFB
     toggleRow(c3, "No Shadows", 52, State.NoShadows, function(v)
-        Features.setNoShadows(v)
+        setFeature("NoShadows", v)
     end)
 
     local _, syncXRay = toggleRow(c3, "X-Ray (transparent world)", 90, State.XRay, function(v)
-        Features.setXRay(v)
+        setFeature("XRay", v)
     end)
     toggleSync.XRay = syncXRay
 
@@ -2582,23 +1856,23 @@ Pages["Local Player"] = function()
 
     sectionTitle("General", y); y += 30
     local c1 = card(y, 344); y += 354
-    toggleRow(c1, "Anti AFK", 12, State.AntiAFK, function(v) State.AntiAFK = v end)
+    toggleRow(c1, "Anti AFK", 12, State.AntiAFK, function(v) setFeature("AntiAFK", v) end)
 
     local _, syncInfJump = toggleRow(c1, "Infinite Jump", 50, State.InfiniteJump, function(v)
-        Features.setInfiniteJump(v)
+        setFeature("InfiniteJump", v)
     end)
     toggleSync.InfiniteJump = syncInfJump
     keybindRow(c1, "Inf Jump Keybind", 88, function() return State.InfJumpKey end, function(k) State.InfJumpKey = k end)
 
     local _, syncFly = toggleRow(c1, "Fly", 126, State.Fly, function(v)
-        Features.setFly(v)
+        setFeature("Fly", v)
     end)
     toggleSync.Fly = syncFly
     keybindRow(c1, "Fly Keybind", 164, function() return State.FlyKey end, function(k) State.FlyKey = k end)
     sliderRow(c1, "Fly Speed", 202, 10, 300, State.FlySpeed, "", function(v) State.FlySpeed = v end)
 
     local _, syncNoclip = toggleRow(c1, "Noclip", 260, State.Noclip, function(v)
-        Features.setNoclip(v)
+        setFeature("Noclip", v)
     end)
     toggleSync.Noclip = syncNoclip
     keybindRow(c1, "Noclip Keybind", 298, function() return State.NoclipKey end, function(k) State.NoclipKey = k end)
@@ -2606,9 +1880,7 @@ Pages["Local Player"] = function()
     sectionTitle("Movement", y); y += 30
     local c2 = card(y, 12 + 5 * 58 + 12); y += 12 + 5 * 58 + 20
     toggleRow(c2, "Enable WalkSpeed", 12, State.EnableWalkSpeed, function(v)
-        State.EnableWalkSpeed = v
-        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum and hum:IsA("Humanoid") then applyWalkSettings(hum) end
+        setFeature("WalkSpeed", v)
     end)
     cycleRow(c2, "WalkSpeed Method", 50, { "Normal", "Boost", "Rigid" },
         function()
@@ -2649,8 +1921,7 @@ Pages["Combat"] = function()
     sectionTitle("AimboT", y); y += 30
     local c1 = card(y, 326); y += 336
     toggleRow(c1, "Enable AimboT", 12, State.AimboT, function(v)
-        State.AimboT = v
-        Notifications.info("AimboT", v and "Enabled" or "Disabled")
+        setFeature("AimboT", v, true)
     end)
     cycleRow(c1, "Aim Key", 50, { "Hold", "Toggle", "Always" },
         function()
@@ -2851,10 +2122,10 @@ Pages["Resources"] = function()
     renderedKey = table.concat(typeNames, "\0")
 
     resourceWatcherDisconnect = ResourceScanner.watch(function()
-        if State._rescanScheduled then return end
-        State._rescanScheduled = true
+        if Hub.Runtime.rescanScheduled then return end
+        Hub.Runtime.rescanScheduled = true
         later(1, function()
-            State._rescanScheduled = false
+            Hub.Runtime.rescanScheduled = false
             if Flags.Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
             local nextBuckets = ResourceScanner.scan()
             local names = {}
@@ -3265,19 +2536,19 @@ Pages["UI Settings"] = function()
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Saved to " .. Config.fileName() .. " in your executor's workspace folder. Without file access, Save copies to the clipboard instead.",
+        Text = "Saved to " .. Hub.Config.fileName() .. " in your executor's workspace folder. Without file access, Save copies to the clipboard instead.",
         TextColor3 = Theme.TextFaint, TextSize = 12, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cCfg,
     })
     actionButton(cCfg, "Save Config", 46, function()
-        Config.save()
+        Hub.Config.save()
     end)
     actionButton(cCfg, "Load Config", 84, function()
-        Config.load()
+        Hub.Config.load()
     end)
     actionButton(cCfg, "Copy Config to Clipboard", 122, function()
-        local text = Config.serialize()
+        local text = Hub.Config.serialize()
         local clip = rawget(_G, "setclipboard")
         if text and type(clip) == "function" then
             pcall(clip, text)
@@ -3287,16 +2558,16 @@ Pages["UI Settings"] = function()
         end
     end)
     local _, pasteBox = textboxRow(cCfg, "", 160, "Paste a config JSON here, then press Enter", function(txt)
-        Config.loadFromText(txt)
+        Hub.Config.loadFromText(txt)
     end)
     pasteBox.Size = UDim2.new(1, -32, 0, 30)
     pasteBox.Position = UDim2.fromOffset(16, 160)
     pasteBox.BackgroundTransparency = 0.5
     actionButton(cCfg, "Delete Saved Config", 198, function()
-        Config.delete()
+        Hub.Config.delete()
     end)
     actionButton(cCfg, "Reset All Settings to Default", 236, function()
-        Config.resetAll()
+        Hub.Config.resetAll()
     end)
 
     -- === Danger ===
@@ -3393,25 +2664,22 @@ Pages["Dashboard"] = function()
     sectionTitle("Quick Toggles", y); y += 34
     local cQ = card(y, 12 + 5 * 38 + 12); y += 12 + 5 * 38 + 20
     local _, syncDashGather = toggleRow(cQ, "Auto Gather", 12, State.AutoGather, function(v)
-        State.AutoGather = v
-        Notifications.info("Auto Gather", v and "Enabled" or "Disabled")
+        setFeature("AutoGather", v, true)
     end)
     toggleSync.AutoGather = syncDashGather
     toggleRow(cQ, "Player ESP", 50, State.PlayerESP, function(v)
-        State.PlayerESP = v
-        Notifications.info("Player ESP", v and "Enabled" or "Disabled")
+        setFeature("PlayerESP", v, true)
     end)
     local _, syncDashFly = toggleRow(cQ, "Fly", 88, State.Fly, function(v)
-        Features.setFly(v)
+        setFeature("Fly", v)
     end)
     toggleSync.Fly = syncDashFly
     local _, syncDashClip = toggleRow(cQ, "Noclip", 126, State.Noclip, function(v)
-        Features.setNoclip(v)
+        setFeature("Noclip", v)
     end)
     toggleSync.Noclip = syncDashClip
     toggleRow(cQ, "AimboT", 164, State.AimboT, function(v)
-        State.AimboT = v
-        Notifications.info("AimboT", v and "Enabled" or "Disabled")
+        setFeature("AimboT", v, true)
     end)
 
     Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
@@ -3430,7 +2698,7 @@ Pages["Dashboard"] = function()
             session.Text = string.format("Place %d  ·  Job %s", game.PlaceId, string.sub(game.JobId, 1, 8))
         end
         if farmLabel.Parent then
-            local last = State._debugLog[1] or "no gather activity yet"
+            local last = Hub.Runtime.debugLog[1] or "no gather activity yet"
             if State.TeleportGather then
                 farmLabel.Text = string.format("Teleport Gather on\n%s", last)
                 farmLabel.TextColor3 = Theme.Success
@@ -3715,12 +2983,6 @@ local function Panic()
     State.AutoSell = false
     if Hub.FeatureManager then
         pcall(function() Hub.FeatureManager.disableAll() end)
-    else
-        pcall(function() setFeature("Fly", false) end)
-        pcall(function() setFeature("Noclip", false) end)
-        pcall(function() setFeature("InfiniteJump", false) end)
-        pcall(function() setFeature("XRay", false) end)
-        pcall(function() setFeature("Fullbright", false) end)
     end
     if cancelMoveTween then pcall(cancelMoveTween) end
     if unlockMovement then pcall(unlockMovement) end
@@ -3786,16 +3048,13 @@ track(UserInputService.InputBegan:Connect(function(input, gpe)
         return
     end
     if inputMatches(input, State.GatherKey) then
-        State.AutoGather = not State.AutoGather
-        local sync = toggleSync.AutoGather
-        if sync then sync(State.AutoGather) end
-        Notifications.info("Auto Gather", State.AutoGather and "Enabled" or "Disabled")
+        setFeature("AutoGather", not State.AutoGather, true)
     elseif inputMatches(input, State.FlyKey) then
-        setFeature("Fly", not State.Fly, true)
+        Hub.Registry.toggle("Fly", true)
     elseif inputMatches(input, State.NoclipKey) then
-        setFeature("Noclip", not State.Noclip, true)
+        Hub.Registry.toggle("Noclip", true)
     elseif inputMatches(input, State.InfJumpKey) then
-        setFeature("InfiniteJump", not State.InfiniteJump, true)
+        Hub.Registry.toggle("InfiniteJump", true)
     end
 end))
 
@@ -4407,50 +3666,6 @@ local function getHumanoid(): Humanoid?
     if hum and hum:IsA("Humanoid") then return hum end
     return nil
 end
-
--- Keep WalkSpeed / JumpPower applied after the server overwrites them, and
--- actually implement Boost (extra velocity) and Rigid (CFrame step).
-Scheduler.add("walkspeed", "logic", 0, function(dt)
-    if Flags.Unloading or not State.EnableWalkSpeed then return end
-    local hum = getHumanoid()
-    local root = getRoot()
-    if not hum or not root or hum.Health <= 0 then return end
-    if State.Fly or root.Anchored then return end
-    if State.TeleportGather or (State.AutoGather and not State.LegitMode) then return end
-
-    local method = State.WalkSpeedMethod
-    local speed = math.max(State.WalkSpeed, 1)
-    if method == "Normal" then
-        if math.abs(hum.WalkSpeed - speed) > 0.05 then
-            hum.WalkSpeed = speed
-        end
-        return
-    end
-    if method == "Boost" then
-        if math.abs(hum.WalkSpeed - 16) > 0.05 then
-            hum.WalkSpeed = 16
-        end
-        local dir = hum.MoveDirection
-        if dir.Magnitude > 0.05 then
-            local extra = math.max(speed, 16)
-            root.AssemblyLinearVelocity = Vector3.new(
-                dir.X * extra,
-                root.AssemblyLinearVelocity.Y,
-                dir.Z * extra
-            )
-        end
-        return
-    end
-    -- Rigid: ignore physics friction and step the root ourselves.
-    if math.abs(hum.WalkSpeed) > 0.05 then
-        hum.WalkSpeed = 0
-    end
-    local dir = hum.MoveDirection
-    if dir.Magnitude > 0.05 then
-        local step = dir.Unit * speed * dt
-        root.CFrame = root.CFrame + Vector3.new(step.X, 0, step.Z)
-    end
-end)
 
 local function flatDist(a: Vector3, b: Vector3): number
     local dx, dz = a.X - b.X, a.Z - b.Z
@@ -5225,8 +4440,8 @@ local function pinAt(obj: Instance?, treePos: Vector3)
 end
 
 local function setFarmStatus(txt: string, color: Color3)
-    local statusLabel = State._statusLabel
-    local statusDot = State._statusDot
+    local statusLabel = Hub.Runtime.statusLabel
+    local statusDot = Hub.Runtime.statusDot
     if statusLabel and statusLabel.Parent then
         statusLabel.Text = txt
         statusLabel.Visible = State.StatusEnabled
@@ -5541,7 +4756,7 @@ task.defer(function()
 
     -- Restore a saved config before anything else, so the accent and the farm
     -- settings the user left behind are what they come back to.
-    pcall(Config.autoLoad)
+    pcall(function() if Hub.Config then Hub.Config.autoLoad() end end)
     pcall(function()
         if typeof(State.ThemeAccent) == "Color3" and typeof(State.ThemeAccent2) == "Color3" then
             applyAccents(State.ThemeAccent, State.ThemeAccent2)
@@ -5560,13 +4775,10 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.3 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.4 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
-    Hub.Features = Features
-    Hub.FEATURE_SETTERS = FEATURE_SETTERS
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
-    Hub.Config = Config
     Hub.Stealth = Stealth
     Hub.ScreenGui = ScreenGui
     Hub.Notifications = Notifications
@@ -5584,21 +4796,6 @@ end)
     end
     Hub.hooks.clearNodeOffsets = function()
         if clearNodeOffsets then clearNodeOffsets() end
-    end
-    Hub.hooks.flightCleanup = function()
-        if flightCleanup then flightCleanup() end
-    end
-    Hub.hooks.noclipCleanup = function()
-        if noclipCleanup then noclipCleanup() end
-    end
-    Hub.hooks.infJumpCleanup = function()
-        if infJumpCleanup then infJumpCleanup() end
-    end
-    Hub.hooks.fullbrightCleanup = function()
-        if fullbrightCleanup then fullbrightCleanup() end
-    end
-    Hub.hooks.xrayCleanup = function()
-        if xrayCleanup then xrayCleanup() end
     end
     Hub.hooks.aimbotCleanup = function()
         if aimbotCleanup then aimbotCleanup() end

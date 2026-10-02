@@ -174,6 +174,14 @@ return function(Hub: any)
 		return Hub.Lifecycle.on("ready", fn)
 	end
 
+	function Hub.Lifecycle.onBeforeUnload(fn: () -> ())
+		return Hub.Lifecycle.on("beforeUnload", fn)
+	end
+
+	function Hub.Lifecycle.onAfterUnload(fn: () -> ())
+		return Hub.Lifecycle.on("afterUnload", fn)
+	end
+
 	Hub.Lifecycle.onCharacter(function()
 		Hub.Lifecycle.emit("respawn")
 	end)

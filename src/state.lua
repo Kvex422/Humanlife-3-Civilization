@@ -213,12 +213,17 @@ return function(Hub: any)
 		DebugMode = false,
 		SafeMode = false,
 		PanicMode = false,
+	}
 
-		_statusLabel = nil,
-		_statusDot = nil,
-		_debugLabel = nil,
-		_debugLog = {},
-		_rescanScheduled = false,
+	-- Runtime handles / session-only values. Never written to TroyHub_config.json.
+	local Runtime: { [string]: any } = {
+		statusLabel = nil,
+		statusDot = nil,
+		debugLabel = nil,
+		debugLog = {},
+		rescanScheduled = false,
+		farmDest = nil,
+		mining = false,
 	}
 
 	local EnvDefaults = {
@@ -314,6 +319,7 @@ return function(Hub: any)
 	end)
 
 	Hub.State = State
+	Hub.Runtime = Runtime
 	Hub.EnvDefaults = EnvDefaults
 	Hub.ConfigDefaults = ConfigDefaults
 	Hub.getState = getState

@@ -1,6 +1,6 @@
 --!strict
--- One registration path for every toggleable system:
--- name, enable, disable, cleanup, state metadata, UI toggle binding, dependencies.
+-- One registration path for every toggleable system.
+-- UI, hotkeys, config reload, and Unload all go through FeatureManager.set.
 
 return function(Hub: any)
 	type Feature = {
@@ -12,6 +12,7 @@ return function(Hub: any)
 		setEnabled: ((boolean) -> ())?,
 		stateKey: string?,
 		dependencies: { string }?,
+		conflicts: { string }?,
 		safe: boolean?,
 		bindToggle: ((boolean) -> ())?,
 	}
@@ -20,6 +21,10 @@ return function(Hub: any)
 	local order: { string } = {}
 
 	local FeatureManager = {}
+
+	local function configTable()
+		return Hub.State
+	end
 
 	function FeatureManager.register(spec: Feature)
 		assert(type(spec.name) == "string" and spec.name ~= "", "feature needs a name")
@@ -39,8 +44,7 @@ return function(Hub: any)
 	end
 
 	function FeatureManager.list(): { string }
-		local copy = table.clone(order)
-		return copy
+		return table.clone(order)
 	end
 
 	function FeatureManager.isEnabled(name: string): boolean
@@ -52,8 +56,9 @@ return function(Hub: any)
 			return spec.getEnabled()
 		end
 		local key = spec.stateKey
-		if key and Hub.State then
-			return Hub.State[key] == true
+		local cfg = configTable()
+		if key and cfg then
+			return cfg[key] == true
 		end
 		return false
 	end
@@ -66,7 +71,8 @@ return function(Hub: any)
 		if Hub.Flags.Unloading and on then
 			return
 		end
-		if on and Hub.State and Hub.State.SafeMode and spec.safe == false then
+		local cfg = configTable()
+		if on and cfg and cfg.SafeMode and spec.safe == false then
 			if Hub.Logger then
 				Hub.Logger.warn("Safe Mode blocked " .. name)
 			end
@@ -76,6 +82,13 @@ return function(Hub: any)
 			for _, dep in spec.dependencies do
 				if not FeatureManager.isEnabled(dep) then
 					FeatureManager.set(dep, true, false)
+				end
+			end
+		end
+		if on and spec.conflicts then
+			for _, other in spec.conflicts do
+				if FeatureManager.isEnabled(other) then
+					FeatureManager.set(other, false, false)
 				end
 			end
 		end
@@ -99,6 +112,9 @@ return function(Hub: any)
 		local sync = (Hub.toggleSync and Hub.toggleSync[name]) or spec.bindToggle
 		if sync then
 			pcall(sync, on)
+		end
+		if Hub.Lifecycle and Hub.Lifecycle.emit then
+			Hub.Lifecycle.emit(on and "featureEnabled" or "featureDisabled", name)
 		end
 		if notify and Hub.Notifications then
 			Hub.Notifications.info(name, on and "Enabled" or "Disabled")
@@ -141,24 +157,6 @@ return function(Hub: any)
 			end
 		end
 		return live
-	end
-
-	-- Wrap the original FEATURE_SETTERS table once app.lua has defined it.
-	function FeatureManager.adoptSetters(setters: { [string]: (boolean) -> () }, toggleSync: { [string]: (boolean) -> () }?)
-		for name, setter in setters do
-			FeatureManager.register({
-				name = name,
-				stateKey = name,
-				setEnabled = setter,
-				getEnabled = function()
-					return Hub.State[name] == true
-				end,
-				cleanup = function()
-					setter(false)
-				end,
-				safe = name ~= "AimboT" and name ~= "Fly" and name ~= "Noclip",
-			})
-		end
 	end
 
 	Hub.FeatureManager = FeatureManager

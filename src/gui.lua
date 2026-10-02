@@ -108,12 +108,11 @@ return function(Hub: any)
 			return "help, toggle, reload, reset, debug, dump, clear, panic, safe, recovery, profile"
 		end,
 		toggle = function(name)
-			if not name or not Hub.FeatureManager then
+			if not name or not Hub.Registry then
 				return "usage: /toggle <feature>"
 			end
-			local on = not Hub.FeatureManager.isEnabled(name)
-			Hub.FeatureManager.set(name, on, true)
-			return name .. " " .. (on and "on" or "off")
+			Hub.Registry.toggle(name, true)
+			return name .. " " .. (Hub.Registry.isEnabled(name) and "on" or "off")
 		end,
 		reload = function()
 			if Hub.ConfigX then
@@ -140,8 +139,8 @@ return function(Hub: any)
 				snap.features and #snap.features or 0)
 		end,
 		clear = function()
-			if Hub.State then
-				table.clear(Hub.State._debugLog)
+			if Hub.Runtime then
+				table.clear(Hub.Runtime.debugLog)
 			end
 			return "logs cleared"
 		end,

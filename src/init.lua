@@ -102,18 +102,15 @@ return function(import: (string) -> any)
 		end
 	end, { priority = 1, budget = 0.002 })
 
-	load("app")
-	load("config")
-	load("gui")
 	load("features/movement")
 	load("features/utility")
 	load("features/esp")
 	load("features/combat")
 	load("features/farming")
+	load("app")
+	load("config")
+	load("gui")
 
-	if Hub.FEATURE_SETTERS then
-		Hub.FeatureManager.adoptSetters(Hub.FEATURE_SETTERS, Hub.toggleSync)
-	end
 	if Hub.Hotkeys then
 		pcall(function()
 			Hub.Hotkeys.adoptState()
