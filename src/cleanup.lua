@@ -190,7 +190,7 @@ return function(Hub: any)
 
 	local function removeGlobals()
 		pcall(function()
-			if rawget(_G, "TroyHubUnload") == Hub.Unload then
+			if rawget(_G, "TroyHubUnload") then
 				rawset(_G, "TroyHubUnload", nil)
 			end
 			if rawget(_G, "TroyHub") == Hub then
@@ -210,6 +210,12 @@ return function(Hub: any)
 			return
 		end
 		Flags.Unloading = true
+		Flags.Closing = false
+		if Hub.Tasks then
+			pcall(function()
+				Hub.Tasks.cancelAll()
+			end)
+		end
 
 		-- 1. disable all states / features
 		local State = Hub.State
@@ -317,12 +323,16 @@ return function(Hub: any)
 	end
 
 	local function bindGlobals()
-		pcall(function()
-			rawset(_G, "TroyHubUnload", Unload)
-			rawset(_G, "TroyHub", Hub)
-		end)
 		shared.TroyHub = Hub
 		shared.TroyHub.Unload = Unload
+		pcall(function()
+			rawset(_G, "TroyHubUnload", function()
+				local hub = (shared :: any).TroyHub
+				if hub and type(hub.Unload) == "function" then
+					hub.Unload()
+				end
+			end)
+		end)
 	end
 
 	Hub.track = track

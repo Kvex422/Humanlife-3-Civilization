@@ -43,6 +43,52 @@ return function(Hub: any)
 		)
 	end
 
+	local binds: { { inst: Instance, role: string, prop: string } } = {}
+
+	local function sameColor(a: Color3, b: Color3): boolean
+		return math.abs(a.R - b.R) < 0.004
+			and math.abs(a.G - b.G) < 0.004
+			and math.abs(a.B - b.B) < 0.004
+	end
+
+	local function roleColor(role: string): Color3?
+		if role == "Accent" then
+			return Theme.Accent
+		elseif role == "Accent2" then
+			return Theme.Accent2
+		elseif role == "StrokeHi" then
+			return Theme.StrokeHi
+		end
+		return nil
+	end
+
+	local function themeBind(inst: Instance, role: string, prop: string?)
+		table.insert(binds, { inst = inst, role = role, prop = prop or "BackgroundColor3" })
+	end
+
+	local function bindIfThemed(inst: Instance, color: any, prop: string)
+		if typeof(color) ~= "Color3" then
+			return
+		end
+		if sameColor(color, Theme.Accent) then
+			themeBind(inst, "Accent", prop)
+		elseif sameColor(color, Theme.Accent2) then
+			themeBind(inst, "Accent2", prop)
+		elseif sameColor(color, Theme.StrokeHi) then
+			themeBind(inst, "StrokeHi", prop)
+		end
+	end
+
+	local function applyBound(inst: Instance, prop: string, color: Color3)
+		pcall(function()
+			if prop == "Gradient" and inst:IsA("UIGradient") then
+				inst.Color = ColorSequence.new(Theme.Accent, Theme.Accent2)
+				return
+			end
+			(inst :: any)[prop] = color
+		end)
+	end
+
 	local function applyAccents(accent: Color3, accent2: Color3)
 		Theme.Accent = accent
 		Theme.Accent2 = accent2
@@ -53,9 +99,16 @@ return function(Hub: any)
 			State.ThemeAccent2 = accent2
 			State.FOVColor = accent
 		end
-		local applyTheme = Hub.applyTheme
-		if type(applyTheme) == "function" then
-			pcall(applyTheme)
+		for i = #binds, 1, -1 do
+			local b = binds[i]
+			if not b.inst.Parent then
+				table.remove(binds, i)
+			else
+				local c = roleColor(b.role)
+				if c then
+					applyBound(b.inst, b.prop, c)
+				end
+			end
 		end
 	end
 
@@ -74,5 +127,7 @@ return function(Hub: any)
 	Hub.ThemePresets = PRESETS
 	Hub.applyAccents = applyAccents
 	Hub.applyThemePreset = applyPreset
+	Hub.themeBind = themeBind
+	Hub.bindIfThemed = bindIfThemed
 	return Hub
 end

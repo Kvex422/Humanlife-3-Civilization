@@ -14,6 +14,7 @@ return function(Hub: any)
 		errors: number,
 		priority: number,
 		group: string,
+		owner: string?,
 		budget: number,
 		disabled: boolean,
 		totalMs: number,
@@ -60,6 +61,11 @@ return function(Hub: any)
 			if not job or job.disabled then
 				continue
 			end
+			if job.owner and Hub.FeatureManager and Hub.FeatureManager.get(job.owner) then
+				if not Hub.FeatureManager.isEnabled(job.owner) then
+					continue
+				end
+			end
 			if job.interval > 0 and (now - job.last) < job.interval then
 				continue
 			end
@@ -91,6 +97,9 @@ return function(Hub: any)
 	end
 
 	function Scheduler.add(name: string, phaseName: string, interval: number, fn: (number) -> (), opts: any?)
+		if Flags.Unloading then
+			return
+		end
 		local options = opts or {}
 		local group = options.group or "root"
 		local key = jobKey(group, name)
@@ -111,6 +120,7 @@ return function(Hub: any)
 			errors = 0,
 			priority = options.priority or 50,
 			group = group,
+			owner = options.owner or Flags.SchedulingOwner,
 			budget = options.budget or DEFAULT_BUDGET,
 			disabled = false,
 			totalMs = 0,
@@ -129,6 +139,16 @@ return function(Hub: any)
 		for _, list in phases do
 			for name in list do
 				if string.sub(name, 1, #prefix) == prefix then
+					list[name] = nil
+				end
+			end
+		end
+	end
+
+	function Scheduler.removeByOwner(owner: string)
+		for _, list in phases do
+			for name, job in list do
+				if job.owner == owner then
 					list[name] = nil
 				end
 			end

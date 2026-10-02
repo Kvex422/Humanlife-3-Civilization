@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.1 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.2 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -39,6 +39,12 @@ return function(Hub: any)
 		for k, v in props do
 			if k ~= "Parent" then
 				inst[k] = v
+				if Hub.bindIfThemed and typeof(v) == "Color3" then
+					if k == "BackgroundColor3" or k == "TextColor3" or k == "ImageColor3"
+						or k == "ScrollBarImageColor3" or k == "Color" then
+						Hub.bindIfThemed(inst, v, k)
+					end
+				end
 			end
 		end
 		if children then
@@ -84,6 +90,9 @@ return function(Hub: any)
 	end
 
 	local function tween(inst, props, time, style, dir)
+		if Hub.Tasks and Hub.Tasks.tween then
+			return Hub.Tasks.tween(inst, props, time, style, dir)
+		end
 		local t = TweenService:Create(
 			inst,
 			TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),
@@ -284,14 +293,14 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.1",
+		script = "2.0.2",
 		configSchema = 2,
 		builtAt = "2026-10-02",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.2  Tracked delays, theme binds, scheduler ownership, shared-only namespace.",
 			"2.0.1  Lifecycle bus, FeatureManager routing, diagnostics page, src on GitHub.",
 			"2.0.0  Modular split, feature registry, injection guard, Unload pipeline.",
-			"1.9.7  Troy rebrand, gold theme, stronger Fullbright, HitGap on every fire.",
 		},
 	}
 
@@ -423,6 +432,29 @@ return function(Hub: any)
 		fireSell = fireSell,
 		FarmStats = FarmStats,
 		Version = Version,
+	}
+	return Hub
+end
+    end)
+
+    def("constants", function()
+-- Tunables that used to live as magic numbers inside widgets and jobs.
+
+return function(Hub: any)
+	Hub.Constants = {
+		Window = { Width = 760, Height = 520, Header = 58, Sidebar = 204 },
+		Notify = { Width = 300, Duration = 3, Fade = 0.22 },
+		Scheduler = {
+			Farm = 0.08,
+			Discover = 0.2,
+			Dashboard = 0.4,
+			Diagnostics = 0.5,
+			Touch = 0.4,
+			XRay = 0.3,
+			GuiFocus = 0.1,
+		},
+		Esp = { Grace = 0.8, Pool = 120 },
+		XRayRange = 300,
 	}
 	return Hub
 end
@@ -798,6 +830,52 @@ return function(Hub: any)
 		)
 	end
 
+	local binds: { { inst: Instance, role: string, prop: string } } = {}
+
+	local function sameColor(a: Color3, b: Color3): boolean
+		return math.abs(a.R - b.R) < 0.004
+			and math.abs(a.G - b.G) < 0.004
+			and math.abs(a.B - b.B) < 0.004
+	end
+
+	local function roleColor(role: string): Color3?
+		if role == "Accent" then
+			return Theme.Accent
+		elseif role == "Accent2" then
+			return Theme.Accent2
+		elseif role == "StrokeHi" then
+			return Theme.StrokeHi
+		end
+		return nil
+	end
+
+	local function themeBind(inst: Instance, role: string, prop: string?)
+		table.insert(binds, { inst = inst, role = role, prop = prop or "BackgroundColor3" })
+	end
+
+	local function bindIfThemed(inst: Instance, color: any, prop: string)
+		if typeof(color) ~= "Color3" then
+			return
+		end
+		if sameColor(color, Theme.Accent) then
+			themeBind(inst, "Accent", prop)
+		elseif sameColor(color, Theme.Accent2) then
+			themeBind(inst, "Accent2", prop)
+		elseif sameColor(color, Theme.StrokeHi) then
+			themeBind(inst, "StrokeHi", prop)
+		end
+	end
+
+	local function applyBound(inst: Instance, prop: string, color: Color3)
+		pcall(function()
+			if prop == "Gradient" and inst:IsA("UIGradient") then
+				inst.Color = ColorSequence.new(Theme.Accent, Theme.Accent2)
+				return
+			end
+			(inst :: any)[prop] = color
+		end)
+	end
+
 	local function applyAccents(accent: Color3, accent2: Color3)
 		Theme.Accent = accent
 		Theme.Accent2 = accent2
@@ -808,9 +886,16 @@ return function(Hub: any)
 			State.ThemeAccent2 = accent2
 			State.FOVColor = accent
 		end
-		local applyTheme = Hub.applyTheme
-		if type(applyTheme) == "function" then
-			pcall(applyTheme)
+		for i = #binds, 1, -1 do
+			local b = binds[i]
+			if not b.inst.Parent then
+				table.remove(binds, i)
+			else
+				local c = roleColor(b.role)
+				if c then
+					applyBound(b.inst, b.prop, c)
+				end
+			end
 		end
 	end
 
@@ -829,6 +914,8 @@ return function(Hub: any)
 	Hub.ThemePresets = PRESETS
 	Hub.applyAccents = applyAccents
 	Hub.applyThemePreset = applyPreset
+	Hub.themeBind = themeBind
+	Hub.bindIfThemed = bindIfThemed
 	return Hub
 end
     end)
@@ -1025,7 +1112,7 @@ return function(Hub: any)
 
 	local function removeGlobals()
 		pcall(function()
-			if rawget(_G, "TroyHubUnload") == Hub.Unload then
+			if rawget(_G, "TroyHubUnload") then
 				rawset(_G, "TroyHubUnload", nil)
 			end
 			if rawget(_G, "TroyHub") == Hub then
@@ -1045,6 +1132,12 @@ return function(Hub: any)
 			return
 		end
 		Flags.Unloading = true
+		Flags.Closing = false
+		if Hub.Tasks then
+			pcall(function()
+				Hub.Tasks.cancelAll()
+			end)
+		end
 
 		-- 1. disable all states / features
 		local State = Hub.State
@@ -1152,12 +1245,16 @@ return function(Hub: any)
 	end
 
 	local function bindGlobals()
-		pcall(function()
-			rawset(_G, "TroyHubUnload", Unload)
-			rawset(_G, "TroyHub", Hub)
-		end)
 		shared.TroyHub = Hub
 		shared.TroyHub.Unload = Unload
+		pcall(function()
+			rawset(_G, "TroyHubUnload", function()
+				local hub = (shared :: any).TroyHub
+				if hub and type(hub.Unload) == "function" then
+					hub.Unload()
+				end
+			end)
+		end)
 	end
 
 	Hub.track = track
@@ -1179,6 +1276,70 @@ return function(Hub: any)
 end
     end)
 
+    def("tasks", function()
+-- Every delayed callback and tween is owned here so Unload can cancel them.
+
+return function(Hub: any)
+	local TweenService = Hub.Services.TweenService
+	local Flags = Hub.Flags
+
+	local delays: { { cancelled: boolean } } = {}
+	local tweens: { Tween } = {}
+
+	local Tasks = {}
+
+	function Tasks.delay(seconds: number, fn: () -> ())
+		if Flags.Unloading then
+			return nil
+		end
+		local token = { cancelled = false }
+		table.insert(delays, token)
+		task.delay(seconds, function()
+			if token.cancelled or Flags.Unloading then
+				return
+			end
+			pcall(fn)
+		end)
+		return token
+	end
+
+	function Tasks.tween(inst: Instance, props: any, time: number?, style: any?, dir: any?): Tween?
+		if Flags.Unloading or not inst or not inst.Parent then
+			return nil
+		end
+		local info = TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out)
+		local tw = TweenService:Create(inst, info, props)
+		table.insert(tweens, tw)
+		tw.Completed:Connect(function()
+			for i = #tweens, 1, -1 do
+				if tweens[i] == tw then
+					table.remove(tweens, i)
+					break
+				end
+			end
+		end)
+		tw:Play()
+		return tw
+	end
+
+	function Tasks.cancelAll()
+		for _, token in delays do
+			token.cancelled = true
+		end
+		table.clear(delays)
+		for _, tw in tweens do
+			pcall(function()
+				tw:Cancel()
+			end)
+		end
+		table.clear(tweens)
+	end
+
+	Hub.Tasks = Tasks
+	return Hub
+end
+    end)
+
     def("scheduler", function()
 -- Two root connections (Heartbeat / RenderStepped). Jobs are namespaced,
 -- prioritized, isolated after repeated errors, and cannot re-enter add()
@@ -1195,6 +1356,7 @@ return function(Hub: any)
 		errors: number,
 		priority: number,
 		group: string,
+		owner: string?,
 		budget: number,
 		disabled: boolean,
 		totalMs: number,
@@ -1241,6 +1403,11 @@ return function(Hub: any)
 			if not job or job.disabled then
 				continue
 			end
+			if job.owner and Hub.FeatureManager and Hub.FeatureManager.get(job.owner) then
+				if not Hub.FeatureManager.isEnabled(job.owner) then
+					continue
+				end
+			end
 			if job.interval > 0 and (now - job.last) < job.interval then
 				continue
 			end
@@ -1272,6 +1439,9 @@ return function(Hub: any)
 	end
 
 	function Scheduler.add(name: string, phaseName: string, interval: number, fn: (number) -> (), opts: any?)
+		if Flags.Unloading then
+			return
+		end
 		local options = opts or {}
 		local group = options.group or "root"
 		local key = jobKey(group, name)
@@ -1292,6 +1462,7 @@ return function(Hub: any)
 			errors = 0,
 			priority = options.priority or 50,
 			group = group,
+			owner = options.owner or Flags.SchedulingOwner,
 			budget = options.budget or DEFAULT_BUDGET,
 			disabled = false,
 			totalMs = 0,
@@ -1310,6 +1481,16 @@ return function(Hub: any)
 		for _, list in phases do
 			for name in list do
 				if string.sub(name, 1, #prefix) == prefix then
+					list[name] = nil
+				end
+			end
+		end
+	end
+
+	function Scheduler.removeByOwner(owner: string)
+		for _, list in phases do
+			for name, job in list do
+				if job.owner == owner then
 					list[name] = nil
 				end
 			end
@@ -1601,11 +1782,21 @@ return function(Hub: any)
 			end
 		end
 		if spec.setEnabled then
+			Hub.Flags.SchedulingOwner = name
 			spec.setEnabled(on)
+			Hub.Flags.SchedulingOwner = nil
 		elseif on and spec.enable then
+			Hub.Flags.SchedulingOwner = name
 			spec.enable()
+			Hub.Flags.SchedulingOwner = nil
 		elseif (not on) and spec.disable then
 			spec.disable()
+		end
+		if not on and Hub.Scheduler and Hub.Scheduler.removeByOwner then
+			Hub.Scheduler.removeByOwner(name)
+		end
+		if Hub.validateState then
+			pcall(Hub.validateState)
 		end
 		local sync = (Hub.toggleSync and Hub.toggleSync[name]) or spec.bindToggle
 		if sync then
@@ -2012,16 +2203,25 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.0",
+    Text = "Humanlife 3: Civilization   ·   2.0.2",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
 
 
+local function later(seconds: number, fn: () -> ())
+    if Hub.Tasks then
+        return Hub.Tasks.delay(seconds, fn)
+    end
+    return task.delay(seconds, fn)
+end
+
 local function CloseAndUnload()
+    if Flags.Unloading or Flags.Closing then return end
+    Flags.Closing = true
     tween(Main, { Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1 }, 0.18,
         Enum.EasingStyle.Back, Enum.EasingDirection.In)
-    task.delay(0.2, Unload)
+    later(0.2, Unload)
 end
 
 local function makeWinBtn(text, x, hoverColor, onClick)
@@ -2111,64 +2311,15 @@ end)
 -- ============================================================
 local applyAccents
 do
-    local function sameColor(a: Color3, b: Color3): boolean
-        return math.abs(a.R - b.R) < 0.004
-            and math.abs(a.G - b.G) < 0.004
-            and math.abs(a.B - b.B) < 0.004
-    end
-
-    local function recolorTree(root: Instance, from: Color3, to: Color3)
-        if sameColor(from, to) then return end
-        local queue = { root }
-        while #queue > 0 do
-            local inst = table.remove(queue)
-            if inst then
-                for _, child in inst:GetChildren() do
-                    table.insert(queue, child)
-                end
-                pcall(function()
-                    if inst:IsA("GuiObject") and sameColor(inst.BackgroundColor3, from) then
-                        inst.BackgroundColor3 = to
-                    end
-                    if (inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox"))
-                        and sameColor(inst.TextColor3, from) then
-                        inst.TextColor3 = to
-                    end
-                    if (inst:IsA("ImageLabel") or inst:IsA("ImageButton"))
-                        and sameColor(inst.ImageColor3, from) then
-                        inst.ImageColor3 = to
-                    end
-                    if inst:IsA("ScrollingFrame") and sameColor(inst.ScrollBarImageColor3, from) then
-                        inst.ScrollBarImageColor3 = to
-                    end
-                    if inst:IsA("UIStroke") and sameColor(inst.Color, from) then
-                        inst.Color = to
-                    end
-                    if inst:IsA("UIGradient") then
-                        local rebuilt = {}
-                        local changed = false
-                        for _, kp in inst.Color.Keypoints do
-                            if sameColor(kp.Value, from) then
-                                table.insert(rebuilt, ColorSequenceKeypoint.new(kp.Time, to))
-                                changed = true
-                            else
-                                table.insert(rebuilt, kp)
-                            end
-                        end
-                        if changed then inst.Color = ColorSequence.new(rebuilt) end
-                    end
-                end)
-            end
-        end
-    end
-
     applyAccents = function(accent: Color3, accent2: Color3)
-        recolorTree(ScreenGui, Theme.Accent, accent)
-        recolorTree(ScreenGui, Theme.Accent2, accent2)
-        Theme.Accent = accent
-        Theme.Accent2 = accent2
-        State.ThemeAccent = accent
-        State.ThemeAccent2 = accent2
+        if Hub.applyAccents then
+            Hub.applyAccents(accent, accent2)
+        else
+            Theme.Accent = accent
+            Theme.Accent2 = accent2
+            State.ThemeAccent = accent
+            State.ThemeAccent2 = accent2
+        end
     end
 end
 
@@ -2233,8 +2384,8 @@ do
         TweenService:Create(progressFill, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
             Size = UDim2.fromScale(0, 1),
         }):Play()
-        task.delay(duration, function()
-            if not toast.Parent then return end
+        later(duration, function()
+            if Flags.Unloading or not toast.Parent then return end
             TweenService:Create(toast, TweenInfo.new(0.22), { BackgroundTransparency = 1 }):Play()
             TweenService:Create(toastStroke, TweenInfo.new(0.22), { Transparency = 1 }):Play()
             for _, c in toast:GetDescendants() do
@@ -2242,8 +2393,9 @@ do
                     TweenService:Create(c, TweenInfo.new(0.22), { TextTransparency = 1 }):Play()
                 end
             end
-            task.wait(0.25)
-            if toast.Parent then toast:Destroy() end
+            later(0.25, function()
+                if toast.Parent then toast:Destroy() end
+            end)
         end)
     end
 
@@ -3167,7 +3319,7 @@ do
         if rejoined or Flags.Unloading then return end
         rejoined = true
         log("auto-rejoin: " .. reason)
-        task.delay(1.5, function()
+        later(1.5, function()
             pcall(function()
                 TeleportService:Teleport(game.PlaceId, player)
             end)
@@ -4011,7 +4163,7 @@ function ResourceScanner.watch(callback)
         local function ping()
             if queued then return end
             queued = true
-            task.delay(0.4, function()
+            later(0.4, function()
                 queued = false
                 if not Flags.Unloading then callback() end
             end)
@@ -4742,7 +4894,7 @@ Pages["Resources"] = function()
     resourceWatcherDisconnect = ResourceScanner.watch(function()
         if State._rescanScheduled then return end
         State._rescanScheduled = true
-        task.delay(1, function()
+        later(1, function()
             State._rescanScheduled = false
             if Flags.Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
             local nextBuckets = ResourceScanner.scan()
@@ -7445,11 +7597,11 @@ task.defer(function()
     end
 
     -- Index every page for the search box once the first page is up.
-    task.delay(1.5, function()
+    later(1.5, function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.1 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.2 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.Features = Features
     Hub.FEATURE_SETTERS = FEATURE_SETTERS
@@ -8182,6 +8334,7 @@ return function(import: (string) -> any)
 			Unloading = false,
 			keybindCapturing = false,
 			ActivePage = "Dashboard",
+			Closing = false,
 			StartedAt = os.clock(),
 		},
 		Diagnostics = {},
@@ -8216,9 +8369,11 @@ return function(import: (string) -> any)
 	load("utils")
 	load("logger")
 	load("data")
+	load("constants")
 	load("state")
 	load("theme")
 	load("cleanup")
+	load("tasks")
 	load("scheduler")
 	load("lifecycle")
 	load("featureManager")

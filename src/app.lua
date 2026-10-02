@@ -162,16 +162,25 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.0",
+    Text = "Humanlife 3: Civilization   ·   2.0.2",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
 
 
+local function later(seconds: number, fn: () -> ())
+    if Hub.Tasks then
+        return Hub.Tasks.delay(seconds, fn)
+    end
+    return task.delay(seconds, fn)
+end
+
 local function CloseAndUnload()
+    if Flags.Unloading or Flags.Closing then return end
+    Flags.Closing = true
     tween(Main, { Size = UDim2.fromOffset(0, 0), BackgroundTransparency = 1 }, 0.18,
         Enum.EasingStyle.Back, Enum.EasingDirection.In)
-    task.delay(0.2, Unload)
+    later(0.2, Unload)
 end
 
 local function makeWinBtn(text, x, hoverColor, onClick)
@@ -261,64 +270,15 @@ end)
 -- ============================================================
 local applyAccents
 do
-    local function sameColor(a: Color3, b: Color3): boolean
-        return math.abs(a.R - b.R) < 0.004
-            and math.abs(a.G - b.G) < 0.004
-            and math.abs(a.B - b.B) < 0.004
-    end
-
-    local function recolorTree(root: Instance, from: Color3, to: Color3)
-        if sameColor(from, to) then return end
-        local queue = { root }
-        while #queue > 0 do
-            local inst = table.remove(queue)
-            if inst then
-                for _, child in inst:GetChildren() do
-                    table.insert(queue, child)
-                end
-                pcall(function()
-                    if inst:IsA("GuiObject") and sameColor(inst.BackgroundColor3, from) then
-                        inst.BackgroundColor3 = to
-                    end
-                    if (inst:IsA("TextLabel") or inst:IsA("TextButton") or inst:IsA("TextBox"))
-                        and sameColor(inst.TextColor3, from) then
-                        inst.TextColor3 = to
-                    end
-                    if (inst:IsA("ImageLabel") or inst:IsA("ImageButton"))
-                        and sameColor(inst.ImageColor3, from) then
-                        inst.ImageColor3 = to
-                    end
-                    if inst:IsA("ScrollingFrame") and sameColor(inst.ScrollBarImageColor3, from) then
-                        inst.ScrollBarImageColor3 = to
-                    end
-                    if inst:IsA("UIStroke") and sameColor(inst.Color, from) then
-                        inst.Color = to
-                    end
-                    if inst:IsA("UIGradient") then
-                        local rebuilt = {}
-                        local changed = false
-                        for _, kp in inst.Color.Keypoints do
-                            if sameColor(kp.Value, from) then
-                                table.insert(rebuilt, ColorSequenceKeypoint.new(kp.Time, to))
-                                changed = true
-                            else
-                                table.insert(rebuilt, kp)
-                            end
-                        end
-                        if changed then inst.Color = ColorSequence.new(rebuilt) end
-                    end
-                end)
-            end
-        end
-    end
-
     applyAccents = function(accent: Color3, accent2: Color3)
-        recolorTree(ScreenGui, Theme.Accent, accent)
-        recolorTree(ScreenGui, Theme.Accent2, accent2)
-        Theme.Accent = accent
-        Theme.Accent2 = accent2
-        State.ThemeAccent = accent
-        State.ThemeAccent2 = accent2
+        if Hub.applyAccents then
+            Hub.applyAccents(accent, accent2)
+        else
+            Theme.Accent = accent
+            Theme.Accent2 = accent2
+            State.ThemeAccent = accent
+            State.ThemeAccent2 = accent2
+        end
     end
 end
 
@@ -383,8 +343,8 @@ do
         TweenService:Create(progressFill, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
             Size = UDim2.fromScale(0, 1),
         }):Play()
-        task.delay(duration, function()
-            if not toast.Parent then return end
+        later(duration, function()
+            if Flags.Unloading or not toast.Parent then return end
             TweenService:Create(toast, TweenInfo.new(0.22), { BackgroundTransparency = 1 }):Play()
             TweenService:Create(toastStroke, TweenInfo.new(0.22), { Transparency = 1 }):Play()
             for _, c in toast:GetDescendants() do
@@ -392,8 +352,9 @@ do
                     TweenService:Create(c, TweenInfo.new(0.22), { TextTransparency = 1 }):Play()
                 end
             end
-            task.wait(0.25)
-            if toast.Parent then toast:Destroy() end
+            later(0.25, function()
+                if toast.Parent then toast:Destroy() end
+            end)
         end)
     end
 
@@ -1317,7 +1278,7 @@ do
         if rejoined or Flags.Unloading then return end
         rejoined = true
         log("auto-rejoin: " .. reason)
-        task.delay(1.5, function()
+        later(1.5, function()
             pcall(function()
                 TeleportService:Teleport(game.PlaceId, player)
             end)
@@ -2161,7 +2122,7 @@ function ResourceScanner.watch(callback)
         local function ping()
             if queued then return end
             queued = true
-            task.delay(0.4, function()
+            later(0.4, function()
                 queued = false
                 if not Flags.Unloading then callback() end
             end)
@@ -2892,7 +2853,7 @@ Pages["Resources"] = function()
     resourceWatcherDisconnect = ResourceScanner.watch(function()
         if State._rescanScheduled then return end
         State._rescanScheduled = true
-        task.delay(1, function()
+        later(1, function()
             State._rescanScheduled = false
             if Flags.Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
             local nextBuckets = ResourceScanner.scan()
@@ -5595,11 +5556,11 @@ task.defer(function()
     end
 
     -- Index every page for the search box once the first page is up.
-    task.delay(1.5, function()
+    later(1.5, function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.1 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.2 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.Features = Features
     Hub.FEATURE_SETTERS = FEATURE_SETTERS

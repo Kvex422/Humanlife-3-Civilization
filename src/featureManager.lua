@@ -75,11 +75,21 @@ return function(Hub: any)
 			end
 		end
 		if spec.setEnabled then
+			Hub.Flags.SchedulingOwner = name
 			spec.setEnabled(on)
+			Hub.Flags.SchedulingOwner = nil
 		elseif on and spec.enable then
+			Hub.Flags.SchedulingOwner = name
 			spec.enable()
+			Hub.Flags.SchedulingOwner = nil
 		elseif (not on) and spec.disable then
 			spec.disable()
+		end
+		if not on and Hub.Scheduler and Hub.Scheduler.removeByOwner then
+			Hub.Scheduler.removeByOwner(name)
+		end
+		if Hub.validateState then
+			pcall(Hub.validateState)
 		end
 		local sync = (Hub.toggleSync and Hub.toggleSync[name]) or spec.bindToggle
 		if sync then

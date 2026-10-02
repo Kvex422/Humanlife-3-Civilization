@@ -24,6 +24,12 @@ return function(Hub: any)
 		for k, v in props do
 			if k ~= "Parent" then
 				inst[k] = v
+				if Hub.bindIfThemed and typeof(v) == "Color3" then
+					if k == "BackgroundColor3" or k == "TextColor3" or k == "ImageColor3"
+						or k == "ScrollBarImageColor3" or k == "Color" then
+						Hub.bindIfThemed(inst, v, k)
+					end
+				end
 			end
 		end
 		if children then
@@ -69,6 +75,9 @@ return function(Hub: any)
 	end
 
 	local function tween(inst, props, time, style, dir)
+		if Hub.Tasks and Hub.Tasks.tween then
+			return Hub.Tasks.tween(inst, props, time, style, dir)
+		end
 		local t = TweenService:Create(
 			inst,
 			TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out),

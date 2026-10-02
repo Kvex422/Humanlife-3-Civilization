@@ -48,6 +48,7 @@ return function(import: (string) -> any)
 			Unloading = false,
 			keybindCapturing = false,
 			ActivePage = "Dashboard",
+			Closing = false,
 			StartedAt = os.clock(),
 		},
 		Diagnostics = {},
@@ -82,9 +83,11 @@ return function(import: (string) -> any)
 	load("utils")
 	load("logger")
 	load("data")
+	load("constants")
 	load("state")
 	load("theme")
 	load("cleanup")
+	load("tasks")
 	load("scheduler")
 	load("lifecycle")
 	load("featureManager")
