@@ -3,15 +3,14 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.4",
+		script = "2.0.5",
 		configSchema = 2,
 		builtAt = "2026-10-02",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
-			"2.0.4  Registry-only toggles, feature bodies in src/features, PageScope, Config JSON module.",
-			"2.0.3  Feature registry, lifecycle bus, diagnostics module, persistence facade.",
-			"2.0.2  Tracked delays, theme binds, scheduler ownership, shared-only namespace.",
-			"2.0.1  Lifecycle bus, FeatureManager routing, diagnostics page, src on GitHub.",
+			"2.0.5  Hub layout (core/features/ui/config). Simple registry and lifecycle. JSON settings only.",
+			"2.0.4  Registry-only toggles, feature bodies in src/features, Config JSON module.",
+			"2.0.3  Feature registry, lifecycle, diagnostics, persistence.",
 		},
 	}
 

@@ -1,6 +1,5 @@
 --!strict
--- One registration path for every toggleable system.
--- UI, hotkeys, config reload, and Unload all go through FeatureManager.set.
+-- Feature list: register, enable, disable, cleanup. No dependency/conflict graph.
 
 return function(Hub: any)
 	type Feature = {
@@ -11,10 +10,7 @@ return function(Hub: any)
 		getEnabled: (() -> boolean)?,
 		setEnabled: ((boolean) -> ())?,
 		stateKey: string?,
-		dependencies: { string }?,
-		conflicts: { string }?,
 		safe: boolean?,
-		bindToggle: ((boolean) -> ())?,
 	}
 
 	local registry: { [string]: Feature } = {}
@@ -22,11 +18,18 @@ return function(Hub: any)
 
 	local FeatureManager = {}
 
-	local function configTable()
-		return Hub.State
-	end
-
-	function FeatureManager.register(spec: Feature)
+	function FeatureManager.register(nameOrSpec: any, enable: any?, disable: any?, cleanup: any?)
+		local spec: Feature
+		if type(nameOrSpec) == "table" then
+			spec = nameOrSpec
+		else
+			spec = {
+				name = nameOrSpec,
+				enable = enable,
+				disable = disable,
+				cleanup = cleanup,
+			}
+		end
 		assert(type(spec.name) == "string" and spec.name ~= "", "feature needs a name")
 		if not registry[spec.name] then
 			table.insert(order, spec.name)
@@ -56,9 +59,8 @@ return function(Hub: any)
 			return spec.getEnabled()
 		end
 		local key = spec.stateKey
-		local cfg = configTable()
-		if key and cfg then
-			return cfg[key] == true
+		if key and Hub.State then
+			return Hub.State[key] == true
 		end
 		return false
 	end
@@ -71,26 +73,11 @@ return function(Hub: any)
 		if Hub.Flags.Unloading and on then
 			return
 		end
-		local cfg = configTable()
-		if on and cfg and cfg.SafeMode and spec.safe == false then
+		if on and Hub.State and Hub.State.SafeMode and spec.safe == false then
 			if Hub.Logger then
 				Hub.Logger.warn("Safe Mode blocked " .. name)
 			end
 			return
-		end
-		if on and spec.dependencies then
-			for _, dep in spec.dependencies do
-				if not FeatureManager.isEnabled(dep) then
-					FeatureManager.set(dep, true, false)
-				end
-			end
-		end
-		if on and spec.conflicts then
-			for _, other in spec.conflicts do
-				if FeatureManager.isEnabled(other) then
-					FeatureManager.set(other, false, false)
-				end
-			end
 		end
 		if spec.setEnabled then
 			Hub.Flags.SchedulingOwner = name
@@ -109,12 +96,9 @@ return function(Hub: any)
 		if Hub.validateState then
 			pcall(Hub.validateState)
 		end
-		local sync = (Hub.toggleSync and Hub.toggleSync[name]) or spec.bindToggle
+		local sync = Hub.toggleSync and Hub.toggleSync[name]
 		if sync then
 			pcall(sync, on)
-		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit(on and "featureEnabled" or "featureDisabled", name)
 		end
 		if notify and Hub.Notifications then
 			Hub.Notifications.info(name, on and "Enabled" or "Disabled")
@@ -135,15 +119,6 @@ return function(Hub: any)
 		end
 	end
 
-	function FeatureManager.cleanupAll()
-		for i = #order, 1, -1 do
-			local spec = registry[order[i]]
-			if spec and spec.cleanup then
-				pcall(spec.cleanup)
-			end
-		end
-	end
-
 	function FeatureManager.clear()
 		table.clear(registry)
 		table.clear(order)
@@ -160,5 +135,21 @@ return function(Hub: any)
 	end
 
 	Hub.FeatureManager = FeatureManager
+	Hub.Registry = {
+		declare = FeatureManager.register,
+		enable = function(name: string, notify: boolean?)
+			FeatureManager.set(name, true, notify)
+		end,
+		disable = function(name: string, notify: boolean?)
+			FeatureManager.set(name, false, notify)
+		end,
+		toggle = function(name: string, notify: boolean?)
+			FeatureManager.set(name, not FeatureManager.isEnabled(name), if notify == nil then true else notify)
+		end,
+		isEnabled = FeatureManager.isEnabled,
+		list = FeatureManager.list,
+		active = FeatureManager.active,
+		get = FeatureManager.get,
+	}
 	return Hub
 end

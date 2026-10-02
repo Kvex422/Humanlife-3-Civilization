@@ -1,16 +1,16 @@
 --!strict
--- One Character / Humanoid / camera / death bus. Features subscribe here
--- instead of each attaching their own CharacterAdded.
+-- Character / camera / unload hooks. Not a generic event bus.
 
 return function(Hub: any)
 	local player = Hub.player
 	local Flags = Hub.Flags
 
 	local onCharacter: { (Model) -> () } = {}
-	local onRemoving: { (Model) -> () } = {}
 	local onHumanoid: { (Humanoid, Model) -> () } = {}
 	local onDied: { (Humanoid, Model) -> () } = {}
 	local onCamera: { (Camera) -> () } = {}
+	local onUnloadFns: { () -> () } = {}
+	local onRespawnFns: { () -> () } = {}
 
 	local currentChar: Model? = nil
 	local currentHum: Humanoid? = nil
@@ -59,6 +59,7 @@ return function(Hub: any)
 		end)
 		Hub.track(childConn)
 		fire(onCharacter, char)
+		fire(onRespawnFns)
 		local hum = char:FindFirstChildOfClass("Humanoid")
 		if not hum then
 			local waited = char:WaitForChild("Humanoid", 10)
@@ -81,24 +82,19 @@ return function(Hub: any)
 	end))
 
 	Hub.track(player.CharacterRemoving:Connect(function(char)
-		fire(onRemoving, char)
 		if currentChar == char then
 			currentChar = nil
 			currentHum = nil
 		end
 	end))
 
-	local function bindCamera(cam: Camera)
-		fire(onCamera, cam)
-	end
-
 	if workspace.CurrentCamera then
-		bindCamera(workspace.CurrentCamera)
+		fire(onCamera, workspace.CurrentCamera)
 	end
 	Hub.track(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
 		local cam = workspace.CurrentCamera
 		if cam then
-			bindCamera(cam)
+			fire(onCamera, cam)
 		end
 	end))
 
@@ -119,12 +115,27 @@ return function(Hub: any)
 		return fn
 	end
 
+	local function fireUnload()
+		fire(onUnloadFns)
+	end
+
 	Hub.Lifecycle = {
-		onCharacter = function(fn)
+		onUnload = function(fn)
+			return listen(onUnloadFns, fn, nil)
+		end,
+		onRespawn = function(fn)
+			return listen(onRespawnFns, fn, nil)
+		end,
+		onCharacterAdded = function(fn)
 			return listen(onCharacter, fn, currentChar and { currentChar } or nil)
 		end,
-		onRemoving = function(fn)
-			return listen(onRemoving, fn, nil)
+		onCameraChanged = function(fn)
+			local cam = workspace.CurrentCamera
+			return listen(onCamera, fn, cam and { cam } or nil)
+		end,
+		-- Character pipeline used by farm pin / walkspeed. Not a generic bus.
+		onCharacter = function(fn)
+			return listen(onCharacter, fn, currentChar and { currentChar } or nil)
 		end,
 		onHumanoid = function(fn)
 			return listen(onHumanoid, fn, (currentHum and currentChar) and { currentHum, currentChar } or nil)
@@ -142,49 +153,8 @@ return function(Hub: any)
 		humanoid = function()
 			return currentHum
 		end,
+		fireUnload = fireUnload,
 	}
-
-	local events: { [string]: { (...any) -> () } } = {}
-
-	function Hub.Lifecycle.on(name: string, fn: (...any) -> ())
-		local list = events[name]
-		if not list then
-			list = {}
-			events[name] = list
-		end
-		table.insert(list, fn)
-		return fn
-	end
-
-	function Hub.Lifecycle.emit(name: string, ...)
-		local list = events[name]
-		if not list then
-			return
-		end
-		for _, fn in list do
-			pcall(fn, ...)
-		end
-	end
-
-	function Hub.Lifecycle.onUnload(fn: () -> ())
-		return Hub.Lifecycle.on("unload", fn)
-	end
-
-	function Hub.Lifecycle.onReady(fn: () -> ())
-		return Hub.Lifecycle.on("ready", fn)
-	end
-
-	function Hub.Lifecycle.onBeforeUnload(fn: () -> ())
-		return Hub.Lifecycle.on("beforeUnload", fn)
-	end
-
-	function Hub.Lifecycle.onAfterUnload(fn: () -> ())
-		return Hub.Lifecycle.on("afterUnload", fn)
-	end
-
-	Hub.Lifecycle.onCharacter(function()
-		Hub.Lifecycle.emit("respawn")
-	end)
 
 	return Hub
 end

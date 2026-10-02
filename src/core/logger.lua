@@ -18,16 +18,11 @@ return function(Hub: any)
 
 	local function emit(levelName: string, line: string)
 		local State = Hub.State
-		local Runtime = Hub.Runtime
 		if not State then
 			print("[Troy]", line)
 			return
 		end
-		if not Runtime then
-			Runtime = { debugLog = {}, debugLabel = nil }
-			Hub.Runtime = Runtime
-		end
-		Runtime.debugLog = Runtime.debugLog or {}
+		State._debugLog = State._debugLog or {}
 		local level = LEVEL[levelName] or LEVEL.info
 		if levelName == "debug" and not State.DebugMode then
 			return
@@ -36,13 +31,13 @@ return function(Hub: any)
 			return
 		end
 
-		table.insert(Runtime.debugLog, 1, line)
-		while #Runtime.debugLog > 12 do
-			table.remove(Runtime.debugLog)
+		table.insert(State._debugLog, 1, line)
+		while #State._debugLog > 12 do
+			table.remove(State._debugLog)
 		end
-		local label = Runtime.debugLabel
+		local label = State._debugLabel
 		if label and label.Parent then
-			label.Text = table.concat(Runtime.debugLog, "\n")
+			label.Text = table.concat(State._debugLog, "\n")
 		end
 
 		local prefix = "[Troy]"

@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.4 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.5 bundled from src/. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -13,7 +13,7 @@ local function __troyDefPack()
         return factory()
     end
 
-    def("utils", function()
+    def("core/utils", function()
 -- Shared helpers. Everything here is pure or service-light so feature modules
 -- can call it without pulling GUI or farm code.
 
@@ -194,7 +194,7 @@ return function(Hub: any)
 end
     end)
 
-    def("logger", function()
+    def("core/logger", function()
 -- Leveled logger. Debug stays quiet unless State.DebugMode is on.
 -- Errors also land in Hub.Diagnostics.LastError for the debug panel.
 
@@ -214,16 +214,11 @@ return function(Hub: any)
 
 	local function emit(levelName: string, line: string)
 		local State = Hub.State
-		local Runtime = Hub.Runtime
 		if not State then
 			print("[Troy]", line)
 			return
 		end
-		if not Runtime then
-			Runtime = { debugLog = {}, debugLabel = nil }
-			Hub.Runtime = Runtime
-		end
-		Runtime.debugLog = Runtime.debugLog or {}
+		State._debugLog = State._debugLog or {}
 		local level = LEVEL[levelName] or LEVEL.info
 		if levelName == "debug" and not State.DebugMode then
 			return
@@ -232,13 +227,13 @@ return function(Hub: any)
 			return
 		end
 
-		table.insert(Runtime.debugLog, 1, line)
-		while #Runtime.debugLog > 12 do
-			table.remove(Runtime.debugLog)
+		table.insert(State._debugLog, 1, line)
+		while #State._debugLog > 12 do
+			table.remove(State._debugLog)
 		end
-		local label = Runtime.debugLabel
+		local label = State._debugLabel
 		if label and label.Parent then
-			label.Text = table.concat(Runtime.debugLog, "\n")
+			label.Text = table.concat(State._debugLog, "\n")
 		end
 
 		local prefix = "[Troy]"
@@ -297,20 +292,19 @@ return function(Hub: any)
 end
     end)
 
-    def("data", function()
+    def("config/data", function()
 -- Static game data, farm session stats, versioning, and changelog.
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.4",
+		script = "2.0.5",
 		configSchema = 2,
 		builtAt = "2026-10-02",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
-			"2.0.4  Registry-only toggles, feature bodies in src/features, PageScope, Config JSON module.",
-			"2.0.3  Feature registry, lifecycle bus, diagnostics module, persistence facade.",
-			"2.0.2  Tracked delays, theme binds, scheduler ownership, shared-only namespace.",
-			"2.0.1  Lifecycle bus, FeatureManager routing, diagnostics page, src on GitHub.",
+			"2.0.5  Hub layout (core/features/ui/config). Simple registry and lifecycle. JSON settings only.",
+			"2.0.4  Registry-only toggles, feature bodies in src/features, Config JSON module.",
+			"2.0.3  Feature registry, lifecycle, diagnostics, persistence.",
 		},
 	}
 
@@ -447,7 +441,7 @@ return function(Hub: any)
 end
     end)
 
-    def("constants", function()
+    def("core/constants", function()
 -- Tunables that used to live as magic numbers inside widgets and jobs.
 
 return function(Hub: any)
@@ -470,7 +464,7 @@ return function(Hub: any)
 end
     end)
 
-    def("state", function()
+    def("core/state", function()
 -- Typed defaults, clamp/validation, nil-safe get, freeze-after-init for ConfigDefaults.
 
 return function(Hub: any)
@@ -685,17 +679,12 @@ return function(Hub: any)
 		DebugMode = false,
 		SafeMode = false,
 		PanicMode = false,
-	}
 
-	-- Runtime handles / session-only values. Never written to TroyHub_config.json.
-	local Runtime: { [string]: any } = {
-		statusLabel = nil,
-		statusDot = nil,
-		debugLabel = nil,
-		debugLog = {},
-		rescanScheduled = false,
-		farmDest = nil,
-		mining = false,
+		_statusLabel = nil,
+		_statusDot = nil,
+		_debugLabel = nil,
+		_debugLog = {},
+		_rescanScheduled = false,
 	}
 
 	local EnvDefaults = {
@@ -791,7 +780,6 @@ return function(Hub: any)
 	end)
 
 	Hub.State = State
-	Hub.Runtime = Runtime
 	Hub.EnvDefaults = EnvDefaults
 	Hub.ConfigDefaults = ConfigDefaults
 	Hub.getState = getState
@@ -801,7 +789,7 @@ return function(Hub: any)
 end
     end)
 
-    def("theme", function()
+    def("core/theme", function()
 -- Charcoal + gold by default. Extra presets expand the original Gold/Ember/Sage/Sand/Mono set.
 
 return function(Hub: any)
@@ -936,7 +924,7 @@ return function(Hub: any)
 end
     end)
 
-    def("cleanup", function()
+    def("core/cleanup", function()
 -- Connection tracking, page-scoped debris, and the deterministic Unload pipeline.
 
 return function(Hub: any)
@@ -1029,9 +1017,6 @@ return function(Hub: any)
 		if type(onFocus) == "function" then
 			pcall(onFocus, page.data)
 		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit("pageOpened", name)
-		end
 		return page
 	end
 
@@ -1039,9 +1024,6 @@ return function(Hub: any)
 		local page = pageStore[name]
 		if not page then
 			return
-		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit("pageClosed", name)
 		end
 		local onBlur = Hub.PageHooks and Hub.PageHooks[name] and Hub.PageHooks[name].onBlur
 		if type(onBlur) == "function" then
@@ -1155,13 +1137,8 @@ return function(Hub: any)
 		end
 		Flags.Unloading = true
 		Flags.Closing = false
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			pcall(function()
-				Hub.Lifecycle.emit("beforeUnload")
-			end)
-			pcall(function()
-				Hub.Lifecycle.emit("unload")
-			end)
+		if Hub.Lifecycle and Hub.Lifecycle.fireUnload then
+			pcall(Hub.Lifecycle.fireUnload)
 		end
 		if Hub.Tasks then
 			pcall(function()
@@ -1238,12 +1215,6 @@ return function(Hub: any)
 		-- 6. restore defaults
 		restoreDefaults()
 
-		-- 7. restore defaults already ran; afterUnload then drop identity
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			pcall(function()
-				Hub.Lifecycle.emit("afterUnload")
-			end)
-		end
 		removeGlobals()
 
 		-- 8. clear registration tables
@@ -1298,7 +1269,6 @@ return function(Hub: any)
 	Hub.trackPage = trackPage
 	Hub.holdDebris = holdDebris
 	Hub.clearPageScope = clearPageScope
-	Hub.PageScope = Pages
 	Hub.Pages = Pages
 	Hub.isHubInstance = isHubInstance
 	Hub.Unload = Unload
@@ -1312,7 +1282,7 @@ return function(Hub: any)
 end
     end)
 
-    def("tasks", function()
+    def("core/tasks", function()
 -- Every delayed callback and tween is owned here so Unload can cancel them.
 
 return function(Hub: any)
@@ -1376,7 +1346,7 @@ return function(Hub: any)
 end
     end)
 
-    def("scheduler", function()
+    def("core/scheduler", function()
 -- Two root connections (Heartbeat / RenderStepped). Jobs are namespaced,
 -- prioritized, isolated after repeated errors, and cannot re-enter add()
 -- from inside their own callback.
@@ -1591,19 +1561,19 @@ return function(Hub: any)
 end
     end)
 
-    def("lifecycle", function()
--- One Character / Humanoid / camera / death bus. Features subscribe here
--- instead of each attaching their own CharacterAdded.
+    def("core/lifecycle", function()
+-- Character / camera / unload hooks. Not a generic event bus.
 
 return function(Hub: any)
 	local player = Hub.player
 	local Flags = Hub.Flags
 
 	local onCharacter: { (Model) -> () } = {}
-	local onRemoving: { (Model) -> () } = {}
 	local onHumanoid: { (Humanoid, Model) -> () } = {}
 	local onDied: { (Humanoid, Model) -> () } = {}
 	local onCamera: { (Camera) -> () } = {}
+	local onUnloadFns: { () -> () } = {}
+	local onRespawnFns: { () -> () } = {}
 
 	local currentChar: Model? = nil
 	local currentHum: Humanoid? = nil
@@ -1652,6 +1622,7 @@ return function(Hub: any)
 		end)
 		Hub.track(childConn)
 		fire(onCharacter, char)
+		fire(onRespawnFns)
 		local hum = char:FindFirstChildOfClass("Humanoid")
 		if not hum then
 			local waited = char:WaitForChild("Humanoid", 10)
@@ -1674,24 +1645,19 @@ return function(Hub: any)
 	end))
 
 	Hub.track(player.CharacterRemoving:Connect(function(char)
-		fire(onRemoving, char)
 		if currentChar == char then
 			currentChar = nil
 			currentHum = nil
 		end
 	end))
 
-	local function bindCamera(cam: Camera)
-		fire(onCamera, cam)
-	end
-
 	if workspace.CurrentCamera then
-		bindCamera(workspace.CurrentCamera)
+		fire(onCamera, workspace.CurrentCamera)
 	end
 	Hub.track(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
 		local cam = workspace.CurrentCamera
 		if cam then
-			bindCamera(cam)
+			fire(onCamera, cam)
 		end
 	end))
 
@@ -1712,12 +1678,27 @@ return function(Hub: any)
 		return fn
 	end
 
+	local function fireUnload()
+		fire(onUnloadFns)
+	end
+
 	Hub.Lifecycle = {
-		onCharacter = function(fn)
+		onUnload = function(fn)
+			return listen(onUnloadFns, fn, nil)
+		end,
+		onRespawn = function(fn)
+			return listen(onRespawnFns, fn, nil)
+		end,
+		onCharacterAdded = function(fn)
 			return listen(onCharacter, fn, currentChar and { currentChar } or nil)
 		end,
-		onRemoving = function(fn)
-			return listen(onRemoving, fn, nil)
+		onCameraChanged = function(fn)
+			local cam = workspace.CurrentCamera
+			return listen(onCamera, fn, cam and { cam } or nil)
+		end,
+		-- Character pipeline used by farm pin / walkspeed. Not a generic bus.
+		onCharacter = function(fn)
+			return listen(onCharacter, fn, currentChar and { currentChar } or nil)
 		end,
 		onHumanoid = function(fn)
 			return listen(onHumanoid, fn, (currentHum and currentChar) and { currentHum, currentChar } or nil)
@@ -1735,57 +1716,15 @@ return function(Hub: any)
 		humanoid = function()
 			return currentHum
 		end,
+		fireUnload = fireUnload,
 	}
-
-	local events: { [string]: { (...any) -> () } } = {}
-
-	function Hub.Lifecycle.on(name: string, fn: (...any) -> ())
-		local list = events[name]
-		if not list then
-			list = {}
-			events[name] = list
-		end
-		table.insert(list, fn)
-		return fn
-	end
-
-	function Hub.Lifecycle.emit(name: string, ...)
-		local list = events[name]
-		if not list then
-			return
-		end
-		for _, fn in list do
-			pcall(fn, ...)
-		end
-	end
-
-	function Hub.Lifecycle.onUnload(fn: () -> ())
-		return Hub.Lifecycle.on("unload", fn)
-	end
-
-	function Hub.Lifecycle.onReady(fn: () -> ())
-		return Hub.Lifecycle.on("ready", fn)
-	end
-
-	function Hub.Lifecycle.onBeforeUnload(fn: () -> ())
-		return Hub.Lifecycle.on("beforeUnload", fn)
-	end
-
-	function Hub.Lifecycle.onAfterUnload(fn: () -> ())
-		return Hub.Lifecycle.on("afterUnload", fn)
-	end
-
-	Hub.Lifecycle.onCharacter(function()
-		Hub.Lifecycle.emit("respawn")
-	end)
 
 	return Hub
 end
     end)
 
-    def("featureManager", function()
--- One registration path for every toggleable system.
--- UI, hotkeys, config reload, and Unload all go through FeatureManager.set.
+    def("core/featureManager", function()
+-- Feature list: register, enable, disable, cleanup. No dependency/conflict graph.
 
 return function(Hub: any)
 	type Feature = {
@@ -1796,10 +1735,7 @@ return function(Hub: any)
 		getEnabled: (() -> boolean)?,
 		setEnabled: ((boolean) -> ())?,
 		stateKey: string?,
-		dependencies: { string }?,
-		conflicts: { string }?,
 		safe: boolean?,
-		bindToggle: ((boolean) -> ())?,
 	}
 
 	local registry: { [string]: Feature } = {}
@@ -1807,11 +1743,18 @@ return function(Hub: any)
 
 	local FeatureManager = {}
 
-	local function configTable()
-		return Hub.State
-	end
-
-	function FeatureManager.register(spec: Feature)
+	function FeatureManager.register(nameOrSpec: any, enable: any?, disable: any?, cleanup: any?)
+		local spec: Feature
+		if type(nameOrSpec) == "table" then
+			spec = nameOrSpec
+		else
+			spec = {
+				name = nameOrSpec,
+				enable = enable,
+				disable = disable,
+				cleanup = cleanup,
+			}
+		end
 		assert(type(spec.name) == "string" and spec.name ~= "", "feature needs a name")
 		if not registry[spec.name] then
 			table.insert(order, spec.name)
@@ -1841,9 +1784,8 @@ return function(Hub: any)
 			return spec.getEnabled()
 		end
 		local key = spec.stateKey
-		local cfg = configTable()
-		if key and cfg then
-			return cfg[key] == true
+		if key and Hub.State then
+			return Hub.State[key] == true
 		end
 		return false
 	end
@@ -1856,26 +1798,11 @@ return function(Hub: any)
 		if Hub.Flags.Unloading and on then
 			return
 		end
-		local cfg = configTable()
-		if on and cfg and cfg.SafeMode and spec.safe == false then
+		if on and Hub.State and Hub.State.SafeMode and spec.safe == false then
 			if Hub.Logger then
 				Hub.Logger.warn("Safe Mode blocked " .. name)
 			end
 			return
-		end
-		if on and spec.dependencies then
-			for _, dep in spec.dependencies do
-				if not FeatureManager.isEnabled(dep) then
-					FeatureManager.set(dep, true, false)
-				end
-			end
-		end
-		if on and spec.conflicts then
-			for _, other in spec.conflicts do
-				if FeatureManager.isEnabled(other) then
-					FeatureManager.set(other, false, false)
-				end
-			end
 		end
 		if spec.setEnabled then
 			Hub.Flags.SchedulingOwner = name
@@ -1894,12 +1821,9 @@ return function(Hub: any)
 		if Hub.validateState then
 			pcall(Hub.validateState)
 		end
-		local sync = (Hub.toggleSync and Hub.toggleSync[name]) or spec.bindToggle
+		local sync = Hub.toggleSync and Hub.toggleSync[name]
 		if sync then
 			pcall(sync, on)
-		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit(on and "featureEnabled" or "featureDisabled", name)
 		end
 		if notify and Hub.Notifications then
 			Hub.Notifications.info(name, on and "Enabled" or "Disabled")
@@ -1920,15 +1844,6 @@ return function(Hub: any)
 		end
 	end
 
-	function FeatureManager.cleanupAll()
-		for i = #order, 1, -1 do
-			local spec = registry[order[i]]
-			if spec and spec.cleanup then
-				pcall(spec.cleanup)
-			end
-		end
-	end
-
 	function FeatureManager.clear()
 		table.clear(registry)
 		table.clear(order)
@@ -1945,61 +1860,27 @@ return function(Hub: any)
 	end
 
 	Hub.FeatureManager = FeatureManager
+	Hub.Registry = {
+		declare = FeatureManager.register,
+		enable = function(name: string, notify: boolean?)
+			FeatureManager.set(name, true, notify)
+		end,
+		disable = function(name: string, notify: boolean?)
+			FeatureManager.set(name, false, notify)
+		end,
+		toggle = function(name: string, notify: boolean?)
+			FeatureManager.set(name, not FeatureManager.isEnabled(name), if notify == nil then true else notify)
+		end,
+		isEnabled = FeatureManager.isEnabled,
+		list = FeatureManager.list,
+		active = FeatureManager.active,
+		get = FeatureManager.get,
+	}
 	return Hub
 end
     end)
 
-    def("features", function()
--- Public feature registry. Features declare enable / disable / cleanup once;
--- UI, hotkeys, Unload, and diagnostics all go through this API.
-
-return function(Hub: any)
-	local FM = Hub.FeatureManager
-	if not FM then
-		return Hub
-	end
-
-	local Registry = {}
-
-	function Registry.declare(spec: any)
-		FM.register(spec)
-		return spec.name
-	end
-
-	function Registry.enable(name: string, notify: boolean?)
-		FM.set(name, true, notify)
-	end
-
-	function Registry.disable(name: string, notify: boolean?)
-		FM.set(name, false, notify)
-	end
-
-	function Registry.toggle(name: string, notify: boolean?)
-		FM.set(name, not FM.isEnabled(name), if notify == nil then true else notify)
-	end
-
-	function Registry.isEnabled(name: string): boolean
-		return FM.isEnabled(name)
-	end
-
-	function Registry.list(): { string }
-		return FM.list()
-	end
-
-	function Registry.active(): { string }
-		return FM.active()
-	end
-
-	function Registry.get(name: string)
-		return FM.get(name)
-	end
-
-	Hub.Registry = Registry
-	return Hub
-end
-    end)
-
-    def("hotkeys", function()
+    def("core/hotkeys", function()
 -- One keybind manager: hold vs toggle, conflict warnings, status-bar preview.
 
 return function(Hub: any)
@@ -2166,95 +2047,6 @@ return function(Hub: any)
 
 	Hub.Hotkeys = Hotkeys
 	Hub.prettyKey = pretty
-	return Hub
-end
-    end)
-
-    def("diagnostics", function()
--- Control-center snapshot: features, jobs, signals, errors, FPS, ping.
-
-return function(Hub: any)
-	local Stats = Hub.Services.Stats
-	local bag = Hub.Diagnostics or {}
-	bag.LastError = bag.LastError or ""
-	bag.LastWarn = bag.LastWarn or ""
-	bag.History = bag.History or {}
-
-	local function pushHistory(kind: string, line: string)
-		table.insert(bag.History, 1, {
-			kind = kind,
-			line = line,
-			at = os.clock(),
-		})
-		while #bag.History > 24 do
-			table.remove(bag.History)
-		end
-	end
-
-	function bag.noteError(line: string)
-		bag.LastError = line
-		bag.LastErrorAt = os.clock()
-		pushHistory("error", line)
-	end
-
-	function bag.noteWarn(line: string)
-		bag.LastWarn = line
-		pushHistory("warn", line)
-	end
-
-	function bag.snapshot(): { [string]: any }
-		local ping = Hub.getPingMs and Hub.getPingMs() or 0
-		local fps = Hub.FrameRate and Hub.FrameRate.fps or 0
-		local mem = 0
-		pcall(function()
-			mem = Stats:GetTotalMemoryUsageMb()
-		end)
-		local jobs = {}
-		if Hub.Scheduler and Hub.Scheduler.snapshot then
-			jobs = Hub.Scheduler.snapshot()
-		end
-		local isolated = 0
-		for _, job in jobs do
-			if job.disabled then
-				isolated += 1
-			end
-		end
-		return {
-			version = Hub.Version and Hub.Version.script or "?",
-			schema = Hub.Version and Hub.Version.configSchema or 0,
-			page = Hub.Flags.ActivePage,
-			uptime = os.clock() - (Hub.Flags.StartedAt or os.clock()),
-			fps = fps,
-			ping = ping,
-			memoryMb = mem,
-			jobs = Hub.Scheduler and Hub.Scheduler.count and Hub.Scheduler.count() or 0,
-			isolatedJobs = isolated,
-			jobHealth = jobs,
-			features = Hub.Registry and Hub.Registry.active() or (Hub.FeatureManager and Hub.FeatureManager.active() or {}),
-			declared = Hub.Registry and Hub.Registry.list() or {},
-			signals = Hub.Connections and #Hub.Connections or 0,
-			lastError = bag.LastError,
-			lastWarn = bag.LastWarn,
-			history = bag.History,
-			unloading = Hub.Flags.Unloading == true,
-			safe = Hub.State and Hub.State.SafeMode or false,
-			panic = Hub.State and Hub.State.PanicMode or false,
-		}
-	end
-
-	function bag.start()
-		if not Hub.Scheduler then
-			return
-		end
-		Hub.Scheduler.add("diagnostics", "logic", 1, function()
-			if Hub.Flags.Unloading then
-				return
-			end
-			bag.LastSnap = bag.snapshot()
-		end, { priority = 90, budget = 0.004, owner = "Diagnostics" })
-	end
-
-	Hub.Diagnostics = bag
 	return Hub
 end
     end)
@@ -3103,7 +2895,6 @@ return function(Hub: any)
 		name = "AimboT",
 		stateKey = "AimboT",
 		safe = false,
-		dependencies = {},
 		getEnabled = function()
 			return Hub.State.AimboT == true
 		end,
@@ -3206,8 +2997,8 @@ return function(Hub: any)
 end
     end)
 
-    def("app", function()
--- Runtime body: GUI, features, farm, ESP, combat. Framework services come from Hub.
+    def("ui/app", function()
+-- GUI, farm, ESP, combat pages. Core services come from Hub.
 return function(Hub: any)
     local Flags = Hub.Flags
     local State = Hub.State
@@ -3369,7 +3160,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.4",
+    Text = "Humanlife 3: Civilization   ·   2.0.5",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -4660,9 +4451,9 @@ local function clearContent()
     clearPageScope()
     keybindCapturing = false
     table.clear(toggleSync)
-    Hub.Runtime.statusLabel = nil
-    Hub.Runtime.statusDot = nil
-    Hub.Runtime.debugLabel = nil
+    State._statusLabel = nil
+    State._statusDot = nil
+    State._debugLabel = nil
     for _, c in Content:GetChildren() do
         if c:IsA("GuiObject") then c:Destroy() end
     end
@@ -4689,7 +4480,7 @@ end
 local function navigateTo(name: string)
     if not Pages[name] then return end
     local prev = currentPage
-    local scope = Hub.PageScope or Hub.Pages
+    local scope = Hub.Pages
     if prev and prev ~= name and scope and scope.close then
         pcall(function() scope.close(prev) end)
     end
@@ -4969,7 +4760,7 @@ Pages["Auto Gather"] = function()
         BackgroundColor3 = Theme.Danger, BorderSizePixel = 0, Parent = c5,
     })
     corner(5, dot)
-    Hub.Runtime.statusDot = dot
+    State._statusDot = dot
     local statusLabel = new("TextLabel", {
         Size = UDim2.new(1, -60, 0, 40), Position = UDim2.fromOffset(44, 50),
         BackgroundTransparency = 1, Font = Theme.Font,
@@ -4977,7 +4768,7 @@ Pages["Auto Gather"] = function()
         TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = c5,
     })
-    Hub.Runtime.statusLabel = statusLabel
+    State._statusLabel = statusLabel
     y += 120
 
     sectionTitle("Debug Log", y); y += 34
@@ -4989,8 +4780,8 @@ Pages["Auto Gather"] = function()
         TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = c6,
     })
-    Hub.Runtime.debugLabel = debugLabel
-    if #Hub.Runtime.debugLog > 0 then debugLabel.Text = table.concat(Hub.Runtime.debugLog, "\n") end
+    State._debugLabel = debugLabel
+    if #State._debugLog > 0 then debugLabel.Text = table.concat(State._debugLog, "\n") end
 
     Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
 end
@@ -5330,10 +5121,10 @@ Pages["Resources"] = function()
     renderedKey = table.concat(typeNames, "\0")
 
     resourceWatcherDisconnect = ResourceScanner.watch(function()
-        if Hub.Runtime.rescanScheduled then return end
-        Hub.Runtime.rescanScheduled = true
+        if State._rescanScheduled then return end
+        State._rescanScheduled = true
         later(1, function()
-            Hub.Runtime.rescanScheduled = false
+            State._rescanScheduled = false
             if Flags.Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
             local nextBuckets = ResourceScanner.scan()
             local names = {}
@@ -5906,7 +5697,7 @@ Pages["Dashboard"] = function()
             session.Text = string.format("Place %d  ·  Job %s", game.PlaceId, string.sub(game.JobId, 1, 8))
         end
         if farmLabel.Parent then
-            local last = Hub.Runtime.debugLog[1] or "no gather activity yet"
+            local last = State._debugLog[1] or "no gather activity yet"
             if State.TeleportGather then
                 farmLabel.Text = string.format("Teleport Gather on\n%s", last)
                 farmLabel.TextColor3 = Theme.Success
@@ -7648,8 +7439,8 @@ local function pinAt(obj: Instance?, treePos: Vector3)
 end
 
 local function setFarmStatus(txt: string, color: Color3)
-    local statusLabel = Hub.Runtime.statusLabel
-    local statusDot = Hub.Runtime.statusDot
+    local statusLabel = State._statusLabel
+    local statusDot = State._statusDot
     if statusLabel and statusLabel.Parent then
         statusLabel.Text = txt
         statusLabel.Visible = State.StatusEnabled
@@ -7983,7 +7774,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.4 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.5 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
@@ -8013,7 +7804,7 @@ end)
     end
 
     if Hub.Lifecycle then
-        Hub.Lifecycle.onCharacter(function(_char: Model)
+        Hub.Lifecycle.onCharacterAdded(function(_char: Model)
             if Flags.Unloading then return end
             if cancelMoveTween then pcall(cancelMoveTween) end
             if unlockMovement then pcall(unlockMovement) end
@@ -8033,7 +7824,7 @@ end)
             if cancelMoveTween then pcall(cancelMoveTween) end
             if unlockMovement then pcall(unlockMovement) end
         end)
-        Hub.Lifecycle.onCamera(function(cam: Camera)
+        Hub.Lifecycle.onCameraChanged(function(cam: Camera)
             if Flags.Unloading then return end
             pcall(function()
                 cam.FieldOfView = State.FOV
@@ -8044,9 +7835,8 @@ end)
 end
     end)
 
-    def("config", function()
--- Config persistence. JSON file is the user profile; Hub.Config is that API.
--- Schema migration and named profiles live here so farm code never encodes JSON.
+    def("config/config", function()
+-- JSON save/load for Hub.State. Skips _prefixed keys. Not a profile system.
 
 return function(Hub: any)
 	local HttpService = Hub.Services.HttpService
@@ -8247,9 +8037,6 @@ return function(Hub: any)
 		if Hub.validateState then
 			pcall(Hub.validateState)
 		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit("settingsReloaded")
-		end
 		task.defer(function()
 			if Hub.Flags.Unloading then
 				return
@@ -8268,9 +8055,6 @@ return function(Hub: any)
 		if not ok or type(payload) ~= "table" then
 			toast("warn", "Config", "File is not valid JSON")
 			return 0
-		end
-		if Hub.ConfigX and Hub.ConfigX.migrate then
-			payload = Hub.ConfigX.migrate(payload)
 		end
 		return Config.applyTable(payload.state or payload)
 	end
@@ -8394,139 +8178,12 @@ return function(Hub: any)
 		toast("warn", "Config", "Could not delete saved config")
 	end
 
-	local ConfigX = {}
-
-	ConfigX.profiles = {
-		aggressive = "Fast",
-		balanced = "Balanced",
-		stealth = "Safe",
-		["low-resource"] = "Safe",
-		mobile = "Balanced",
-		["high-precision"] = "Balanced",
-	}
-
-	local PROFILE_OVERRIDES = {
-		["low-resource"] = {
-			ResourceLimit = 32,
-			PlayerMaxDist = 280,
-			ResourceMaxDist = 220,
-			TouchButton = true,
-			UIScale = 1.1,
-			AimboT = false,
-		},
-		mobile = {
-			TouchButton = true,
-			AutoUIScale = true,
-			UIScale = 1.15,
-			ShowFOVCircle = false,
-		},
-		["high-precision"] = {
-			HitGap = 0.18,
-			LegitHitDelay = 1.4,
-			AimPrediction = true,
-			AimPredictStrength = 10,
-			FOVCheck = true,
-			FOVRadius = 80,
-		},
-		aggressive = {
-			PriorityWeight = 70,
-			ClusterRadius = 70,
-			SkipSeconds = 5,
-		},
-	}
-
-	function ConfigX.applyProfile(name: string, notify: boolean?)
-		local key = string.lower(name)
-		local stealthName = ConfigX.profiles[key]
-		if stealthName and Hub.Stealth and Hub.Stealth.apply then
-			Hub.Stealth.apply(stealthName, false)
-		end
-		local extra = PROFILE_OVERRIDES[key]
-		if extra and State then
-			for k, v in extra do
-				State[k] = v
-			end
-		end
-		if Hub.validateState then
-			Hub.validateState()
-		end
-		if notify then
-			toast("info", "Profile", name)
-		end
-	end
-
-	function ConfigX.migrate(blob: any): any
-		if type(blob) ~= "table" then
-			return blob
-		end
-		local schema = tonumber(blob.__schema) or 1
-		if schema < 2 then
-			blob.__schema = 2
-			blob.__brand = "TroyHub"
-		end
-		return blob
-	end
-
-	function ConfigX.reload()
-		pcall(Config.autoLoad)
-		if Hub.validateState then
-			Hub.validateState()
-		end
-	end
-
-	local Persistence = {}
-	local ATTR_SCHEMA = "TroyHubConfigSchema"
-	local ATTR_SAVED = "TroyHubSavedAt"
-
-	local function stampPlayer()
-		pcall(function()
-			player:SetAttribute(ATTR_SCHEMA, Hub.Version and Hub.Version.configSchema or 2)
-			player:SetAttribute(ATTR_SAVED, os.time())
-		end)
-	end
-
-	function Persistence.save(): boolean
-		local ok = Config.save() == true
-		if ok then
-			stampPlayer()
-		end
-		return ok
-	end
-
-	function Persistence.load(): boolean
-		return Config.load() == true
-	end
-
-	function Persistence.reload()
-		ConfigX.reload()
-	end
-
-	function Persistence.export(): string?
-		return Config.serialize()
-	end
-
-	function Persistence.applyProfile(name: string, notify: boolean?)
-		ConfigX.applyProfile(name, notify)
-		pcall(Config.save)
-		stampPlayer()
-	end
-
-	function Persistence.lastSavedAt(): number?
-		local v = player:GetAttribute(ATTR_SAVED)
-		if type(v) == "number" then
-			return v
-		end
-		return nil
-	end
-
 	Hub.Config = Config
-	Hub.ConfigX = ConfigX
-	Hub.Persistence = Persistence
 	return Hub
 end
     end)
 
-    def("gui", function()
+    def("ui/gui", function()
 -- Shared GUI helpers: diagnostics snapshot, debug console, animation helpers,
 -- panic/safe/recovery. Widget factories stay in the runtime so they keep
 -- their Content / Theme closures.
@@ -8643,8 +8300,8 @@ return function(Hub: any)
 			return name .. " " .. (Hub.Registry.isEnabled(name) and "on" or "off")
 		end,
 		reload = function()
-			if Hub.ConfigX then
-				Hub.ConfigX.reload()
+			if Hub.Config and Hub.Config.autoLoad then
+				Hub.Config.autoLoad()
 			end
 			return "config reloaded"
 		end,
@@ -8667,8 +8324,8 @@ return function(Hub: any)
 				snap.features and #snap.features or 0)
 		end,
 		clear = function()
-			if Hub.Runtime then
-				table.clear(Hub.Runtime.debugLog)
+			if Hub.State and Hub.State._debugLog then
+				table.clear(Hub.State._debugLog)
 			end
 			return "logs cleared"
 		end,
@@ -8685,11 +8342,11 @@ return function(Hub: any)
 			return "recovery"
 		end,
 		profile = function(name)
-			if Hub.ConfigX and name then
-				Hub.ConfigX.applyProfile(name, true)
+			if Hub.Stealth and name then
+				Hub.Stealth.apply(name, true)
 				return "profile " .. name
 			end
-			return "usage: /profile aggressive|balanced|stealth|low-resource|mobile|high-precision"
+			return "usage: /profile Fast|Balanced|Safe"
 		end,
 	}
 
@@ -8719,8 +8376,7 @@ end
     end)
 
     local boot = (function()
--- TroyHub entry. The bundler inlines every module above this file and
--- provides import(name). Studio can swap import for require.
+-- TroyHub entry. Bundler inlines src modules and provides import(name).
 
 return function(import: (string) -> any)
 	local Players = game:GetService("Players")
@@ -8742,7 +8398,6 @@ return function(import: (string) -> any)
 	end
 	local playerGui = player:WaitForChild("PlayerGui")
 
-	-- Previous inject: deterministic unload first, then the guard.
 	pcall(function()
 		local prev = (shared :: any).TroyHub
 		if prev and type(prev.Unload) == "function" then
@@ -8800,20 +8455,18 @@ return function(import: (string) -> any)
 		factory(Hub)
 	end
 
-	load("utils")
-	load("logger")
-	load("data")
-	load("constants")
-	load("state")
-	load("theme")
-	load("cleanup")
-	load("tasks")
-	load("scheduler")
-	load("lifecycle")
-	load("featureManager")
-	load("features")
-	load("hotkeys")
-	load("diagnostics")
+	load("core/utils")
+	load("core/logger")
+	load("config/data")
+	load("core/constants")
+	load("core/state")
+	load("core/theme")
+	load("core/cleanup")
+	load("core/tasks")
+	load("core/scheduler")
+	load("core/lifecycle")
+	load("core/featureManager")
+	load("core/hotkeys")
 
 	Hub.Scheduler.start()
 	Hub.Scheduler.add("framerate", "render", 0, function(dt)
@@ -8827,9 +8480,9 @@ return function(import: (string) -> any)
 	load("features/esp")
 	load("features/combat")
 	load("features/farming")
-	load("app")
-	load("config")
-	load("gui")
+	load("ui/app")
+	load("config/config")
+	load("ui/gui")
 
 	if Hub.Hotkeys then
 		pcall(function()
@@ -8839,12 +8492,6 @@ return function(import: (string) -> any)
 
 	Hub.bindGlobals()
 	Hub.installKillSwitch()
-	if Hub.Diagnostics and Hub.Diagnostics.start then
-		pcall(Hub.Diagnostics.start)
-	end
-	if Hub.Lifecycle and Hub.Lifecycle.emit then
-		Hub.Lifecycle.emit("ready")
-	end
 
 	if Hub.log then
 		local n = 0

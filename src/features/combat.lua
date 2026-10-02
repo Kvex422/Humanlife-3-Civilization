@@ -12,7 +12,6 @@ return function(Hub: any)
 		name = "AimboT",
 		stateKey = "AimboT",
 		safe = false,
-		dependencies = {},
 		getEnabled = function()
 			return Hub.State.AimboT == true
 		end,

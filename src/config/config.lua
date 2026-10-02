@@ -1,6 +1,5 @@
 --!strict
--- Config persistence. JSON file is the user profile; Hub.Config is that API.
--- Schema migration and named profiles live here so farm code never encodes JSON.
+-- JSON save/load for Hub.State. Skips _prefixed keys. Not a profile system.
 
 return function(Hub: any)
 	local HttpService = Hub.Services.HttpService
@@ -201,9 +200,6 @@ return function(Hub: any)
 		if Hub.validateState then
 			pcall(Hub.validateState)
 		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit("settingsReloaded")
-		end
 		task.defer(function()
 			if Hub.Flags.Unloading then
 				return
@@ -222,9 +218,6 @@ return function(Hub: any)
 		if not ok or type(payload) ~= "table" then
 			toast("warn", "Config", "File is not valid JSON")
 			return 0
-		end
-		if Hub.ConfigX and Hub.ConfigX.migrate then
-			payload = Hub.ConfigX.migrate(payload)
 		end
 		return Config.applyTable(payload.state or payload)
 	end
@@ -348,133 +341,6 @@ return function(Hub: any)
 		toast("warn", "Config", "Could not delete saved config")
 	end
 
-	local ConfigX = {}
-
-	ConfigX.profiles = {
-		aggressive = "Fast",
-		balanced = "Balanced",
-		stealth = "Safe",
-		["low-resource"] = "Safe",
-		mobile = "Balanced",
-		["high-precision"] = "Balanced",
-	}
-
-	local PROFILE_OVERRIDES = {
-		["low-resource"] = {
-			ResourceLimit = 32,
-			PlayerMaxDist = 280,
-			ResourceMaxDist = 220,
-			TouchButton = true,
-			UIScale = 1.1,
-			AimboT = false,
-		},
-		mobile = {
-			TouchButton = true,
-			AutoUIScale = true,
-			UIScale = 1.15,
-			ShowFOVCircle = false,
-		},
-		["high-precision"] = {
-			HitGap = 0.18,
-			LegitHitDelay = 1.4,
-			AimPrediction = true,
-			AimPredictStrength = 10,
-			FOVCheck = true,
-			FOVRadius = 80,
-		},
-		aggressive = {
-			PriorityWeight = 70,
-			ClusterRadius = 70,
-			SkipSeconds = 5,
-		},
-	}
-
-	function ConfigX.applyProfile(name: string, notify: boolean?)
-		local key = string.lower(name)
-		local stealthName = ConfigX.profiles[key]
-		if stealthName and Hub.Stealth and Hub.Stealth.apply then
-			Hub.Stealth.apply(stealthName, false)
-		end
-		local extra = PROFILE_OVERRIDES[key]
-		if extra and State then
-			for k, v in extra do
-				State[k] = v
-			end
-		end
-		if Hub.validateState then
-			Hub.validateState()
-		end
-		if notify then
-			toast("info", "Profile", name)
-		end
-	end
-
-	function ConfigX.migrate(blob: any): any
-		if type(blob) ~= "table" then
-			return blob
-		end
-		local schema = tonumber(blob.__schema) or 1
-		if schema < 2 then
-			blob.__schema = 2
-			blob.__brand = "TroyHub"
-		end
-		return blob
-	end
-
-	function ConfigX.reload()
-		pcall(Config.autoLoad)
-		if Hub.validateState then
-			Hub.validateState()
-		end
-	end
-
-	local Persistence = {}
-	local ATTR_SCHEMA = "TroyHubConfigSchema"
-	local ATTR_SAVED = "TroyHubSavedAt"
-
-	local function stampPlayer()
-		pcall(function()
-			player:SetAttribute(ATTR_SCHEMA, Hub.Version and Hub.Version.configSchema or 2)
-			player:SetAttribute(ATTR_SAVED, os.time())
-		end)
-	end
-
-	function Persistence.save(): boolean
-		local ok = Config.save() == true
-		if ok then
-			stampPlayer()
-		end
-		return ok
-	end
-
-	function Persistence.load(): boolean
-		return Config.load() == true
-	end
-
-	function Persistence.reload()
-		ConfigX.reload()
-	end
-
-	function Persistence.export(): string?
-		return Config.serialize()
-	end
-
-	function Persistence.applyProfile(name: string, notify: boolean?)
-		ConfigX.applyProfile(name, notify)
-		pcall(Config.save)
-		stampPlayer()
-	end
-
-	function Persistence.lastSavedAt(): number?
-		local v = player:GetAttribute(ATTR_SAVED)
-		if type(v) == "number" then
-			return v
-		end
-		return nil
-	end
-
 	Hub.Config = Config
-	Hub.ConfigX = ConfigX
-	Hub.Persistence = Persistence
 	return Hub
 end

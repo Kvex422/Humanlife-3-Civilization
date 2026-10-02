@@ -1,43 +1,31 @@
 # TroyHub
 
-Roblox hub for **Humanlife 3: Civilization**. Source of truth is this `src/` tree. The inject file is generated.
+Single-game hub for **Humanlife 3: Civilization**. Modular source for development; one inject file at runtime.
 
-## Source vs inject
+This is a game hub, not a general-purpose framework. Future games would add a feature pack later — not more layers now.
 
-| Path | Role |
-|------|------|
-| `src/*.lua` | Canonical source. Edit these. |
-| `tools/bundle.ps1` | Build. Concatenates modules into one executor script. |
-| `TroyHub.lua` | Generated bundle. Do not hand-edit. |
-| `Humanlife3CivilizationSCRIPT` (GitHub) | Same generated inject, kept at that name so raw URLs keep working. |
-| `tools/generate_app.py` | Leftover one-shot extractor. Not part of the build. |
+## Layout
 
-Never edit the bundled inject by hand. Changes there are overwritten the next time you bundle.
+```
+src/core/        runtime: utils, logger, state, scheduler, cleanup, theme, lifecycle, features, hotkeys
+src/features/    movement, utility, combat, farming, esp
+src/ui/          window, tabs, settings/status pages
+src/config/      version/data + optional JSON save/load
+src/init.lua     boot
+```
+
+Edit `src/`. Run `tools/bundle.ps1`. Inject `TroyHub.lua` (GitHub name: `Humanlife3CivilizationSCRIPT`). Do not hand-edit the bundle.
+
+## What stays simple
+
+- **Features:** `register` + enable/disable/cleanup. No dependency or conflict graph.
+- **Lifecycle:** unload, respawn, character added, camera changed.
+- **State:** one settings table with clamps. `_` keys are not saved.
+- **Config:** optional `TroyHub_config.json`. No profile/persistence framework.
+- **Scheduler + cleanup:** kept. They prevent leaks and frame spikes.
 
 ## Build
-
-From this folder:
 
 ```powershell
 powershell -File tools/bundle.ps1
 ```
-
-That writes `TroyHub.lua` and copies it to `Desktop\Learning Luau Example.lua.txt`.
-
-Compile check (optional):
-
-```powershell
-& "$env:TEMP\luaubin\luau-compile.exe" --binary .\TroyHub.lua > $null
-```
-
-## Architecture
-
-- `--!strict` Luau modules, Hub-bag DI (`return function(Hub)`).
-- **Registry** (`Hub.Registry.enable/disable/toggle`) is the only feature toggle path. UI, hotkeys, config reload, and Unload all go through it.
-- Feature bodies live in `src/features/` (movement, utility, esp, combat, farming).
-- **Lifecycle** bus: `ready`, `beforeUnload`, `unload`, `afterUnload`, `respawn`, `pageOpened`, `pageClosed`, `settingsReloaded`, `featureEnabled`, `featureDisabled`.
-- `Hub.PageScope` is page-scoped connections/debris. `Hub.State` is persisted settings. `Hub.Runtime` is session handles (debug log, status labels). `Hub.Config` is JSON save/load.
-
-## Version
-
-See `src/data.lua` (`Version.script`).

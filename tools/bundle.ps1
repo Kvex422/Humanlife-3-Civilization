@@ -1,35 +1,31 @@
-# Bundle TroyHub modules into a single executor-injectable Lua file.
+# Bundle TroyHub src into one executor inject file.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $Src = Join-Path $Root "src"
 $Out = Join-Path $Root "TroyHub.lua"
 $Inject = Join-Path $env:USERPROFILE "Desktop\Learning Luau Example.lua.txt"
 
-# app.lua is the live runtime body. generate_app.py is a one-shot extractor.
-
 $modules = @(
-    "utils",
-    "logger",
-    "data",
-    "constants",
-    "state",
-    "theme",
-    "cleanup",
-    "tasks",
-    "scheduler",
-    "lifecycle",
-    "featureManager",
-    "features",
-    "hotkeys",
-    "diagnostics",
+    "core/utils",
+    "core/logger",
+    "config/data",
+    "core/constants",
+    "core/state",
+    "core/theme",
+    "core/cleanup",
+    "core/tasks",
+    "core/scheduler",
+    "core/lifecycle",
+    "core/featureManager",
+    "core/hotkeys",
     "features/movement",
     "features/utility",
     "features/esp",
     "features/combat",
     "features/farming",
-    "app",
-    "config",
-    "gui"
+    "ui/app",
+    "config/config",
+    "ui/gui"
 )
 
 function Get-ModuleSource([string]$rel) {
@@ -41,7 +37,7 @@ function Get-ModuleSource([string]$rel) {
 
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("--!strict")
-[void]$sb.AppendLine("-- TroyHub 2.0.4 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.")
+[void]$sb.AppendLine("-- TroyHub 2.0.5 bundled from src/. Edit modules and re-run tools/bundle.ps1.")
 [void]$sb.AppendLine("local function __troyDefPack()")
 [void]$sb.AppendLine("    local pack = {}")
 [void]$sb.AppendLine("    local function def(name, factory)")
@@ -65,7 +61,6 @@ foreach ($name in $modules) {
 }
 
 $init = Get-ModuleSource "init"
-# init.lua is `return function(import)` — wrap so we can call it with our import.
 [void]$sb.AppendLine("    local boot = (function()")
 [void]$sb.AppendLine($init)
 [void]$sb.AppendLine("    end)()")

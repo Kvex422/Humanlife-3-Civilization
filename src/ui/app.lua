@@ -1,5 +1,5 @@
 --!strict
--- Runtime body: GUI, features, farm, ESP, combat. Framework services come from Hub.
+-- GUI, farm, ESP, combat pages. Core services come from Hub.
 return function(Hub: any)
     local Flags = Hub.Flags
     local State = Hub.State
@@ -161,7 +161,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.4",
+    Text = "Humanlife 3: Civilization   ·   2.0.5",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -1452,9 +1452,9 @@ local function clearContent()
     clearPageScope()
     keybindCapturing = false
     table.clear(toggleSync)
-    Hub.Runtime.statusLabel = nil
-    Hub.Runtime.statusDot = nil
-    Hub.Runtime.debugLabel = nil
+    State._statusLabel = nil
+    State._statusDot = nil
+    State._debugLabel = nil
     for _, c in Content:GetChildren() do
         if c:IsA("GuiObject") then c:Destroy() end
     end
@@ -1481,7 +1481,7 @@ end
 local function navigateTo(name: string)
     if not Pages[name] then return end
     local prev = currentPage
-    local scope = Hub.PageScope or Hub.Pages
+    local scope = Hub.Pages
     if prev and prev ~= name and scope and scope.close then
         pcall(function() scope.close(prev) end)
     end
@@ -1761,7 +1761,7 @@ Pages["Auto Gather"] = function()
         BackgroundColor3 = Theme.Danger, BorderSizePixel = 0, Parent = c5,
     })
     corner(5, dot)
-    Hub.Runtime.statusDot = dot
+    State._statusDot = dot
     local statusLabel = new("TextLabel", {
         Size = UDim2.new(1, -60, 0, 40), Position = UDim2.fromOffset(44, 50),
         BackgroundTransparency = 1, Font = Theme.Font,
@@ -1769,7 +1769,7 @@ Pages["Auto Gather"] = function()
         TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = c5,
     })
-    Hub.Runtime.statusLabel = statusLabel
+    State._statusLabel = statusLabel
     y += 120
 
     sectionTitle("Debug Log", y); y += 34
@@ -1781,8 +1781,8 @@ Pages["Auto Gather"] = function()
         TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = c6,
     })
-    Hub.Runtime.debugLabel = debugLabel
-    if #Hub.Runtime.debugLog > 0 then debugLabel.Text = table.concat(Hub.Runtime.debugLog, "\n") end
+    State._debugLabel = debugLabel
+    if #State._debugLog > 0 then debugLabel.Text = table.concat(State._debugLog, "\n") end
 
     Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
 end
@@ -2122,10 +2122,10 @@ Pages["Resources"] = function()
     renderedKey = table.concat(typeNames, "\0")
 
     resourceWatcherDisconnect = ResourceScanner.watch(function()
-        if Hub.Runtime.rescanScheduled then return end
-        Hub.Runtime.rescanScheduled = true
+        if State._rescanScheduled then return end
+        State._rescanScheduled = true
         later(1, function()
-            Hub.Runtime.rescanScheduled = false
+            State._rescanScheduled = false
             if Flags.Unloading or serial ~= resourcesPageSerial or currentPage ~= "Resources" then return end
             local nextBuckets = ResourceScanner.scan()
             local names = {}
@@ -2698,7 +2698,7 @@ Pages["Dashboard"] = function()
             session.Text = string.format("Place %d  ·  Job %s", game.PlaceId, string.sub(game.JobId, 1, 8))
         end
         if farmLabel.Parent then
-            local last = Hub.Runtime.debugLog[1] or "no gather activity yet"
+            local last = State._debugLog[1] or "no gather activity yet"
             if State.TeleportGather then
                 farmLabel.Text = string.format("Teleport Gather on\n%s", last)
                 farmLabel.TextColor3 = Theme.Success
@@ -4440,8 +4440,8 @@ local function pinAt(obj: Instance?, treePos: Vector3)
 end
 
 local function setFarmStatus(txt: string, color: Color3)
-    local statusLabel = Hub.Runtime.statusLabel
-    local statusDot = Hub.Runtime.statusDot
+    local statusLabel = State._statusLabel
+    local statusDot = State._statusDot
     if statusLabel and statusLabel.Parent then
         statusLabel.Text = txt
         statusLabel.Visible = State.StatusEnabled
@@ -4775,7 +4775,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.4 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.5 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
@@ -4805,7 +4805,7 @@ end)
     end
 
     if Hub.Lifecycle then
-        Hub.Lifecycle.onCharacter(function(_char: Model)
+        Hub.Lifecycle.onCharacterAdded(function(_char: Model)
             if Flags.Unloading then return end
             if cancelMoveTween then pcall(cancelMoveTween) end
             if unlockMovement then pcall(unlockMovement) end
@@ -4825,7 +4825,7 @@ end)
             if cancelMoveTween then pcall(cancelMoveTween) end
             if unlockMovement then pcall(unlockMovement) end
         end)
-        Hub.Lifecycle.onCamera(function(cam: Camera)
+        Hub.Lifecycle.onCameraChanged(function(cam: Camera)
             if Flags.Unloading then return end
             pcall(function()
                 cam.FieldOfView = State.FOV

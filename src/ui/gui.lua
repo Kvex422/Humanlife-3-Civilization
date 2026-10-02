@@ -115,8 +115,8 @@ return function(Hub: any)
 			return name .. " " .. (Hub.Registry.isEnabled(name) and "on" or "off")
 		end,
 		reload = function()
-			if Hub.ConfigX then
-				Hub.ConfigX.reload()
+			if Hub.Config and Hub.Config.autoLoad then
+				Hub.Config.autoLoad()
 			end
 			return "config reloaded"
 		end,
@@ -139,8 +139,8 @@ return function(Hub: any)
 				snap.features and #snap.features or 0)
 		end,
 		clear = function()
-			if Hub.Runtime then
-				table.clear(Hub.Runtime.debugLog)
+			if Hub.State and Hub.State._debugLog then
+				table.clear(Hub.State._debugLog)
 			end
 			return "logs cleared"
 		end,
@@ -157,11 +157,11 @@ return function(Hub: any)
 			return "recovery"
 		end,
 		profile = function(name)
-			if Hub.ConfigX and name then
-				Hub.ConfigX.applyProfile(name, true)
+			if Hub.Stealth and name then
+				Hub.Stealth.apply(name, true)
 				return "profile " .. name
 			end
-			return "usage: /profile aggressive|balanced|stealth|low-resource|mobile|high-precision"
+			return "usage: /profile Fast|Balanced|Safe"
 		end,
 	}
 

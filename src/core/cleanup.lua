@@ -91,9 +91,6 @@ return function(Hub: any)
 		if type(onFocus) == "function" then
 			pcall(onFocus, page.data)
 		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit("pageOpened", name)
-		end
 		return page
 	end
 
@@ -101,9 +98,6 @@ return function(Hub: any)
 		local page = pageStore[name]
 		if not page then
 			return
-		end
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			Hub.Lifecycle.emit("pageClosed", name)
 		end
 		local onBlur = Hub.PageHooks and Hub.PageHooks[name] and Hub.PageHooks[name].onBlur
 		if type(onBlur) == "function" then
@@ -217,13 +211,8 @@ return function(Hub: any)
 		end
 		Flags.Unloading = true
 		Flags.Closing = false
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			pcall(function()
-				Hub.Lifecycle.emit("beforeUnload")
-			end)
-			pcall(function()
-				Hub.Lifecycle.emit("unload")
-			end)
+		if Hub.Lifecycle and Hub.Lifecycle.fireUnload then
+			pcall(Hub.Lifecycle.fireUnload)
 		end
 		if Hub.Tasks then
 			pcall(function()
@@ -300,12 +289,6 @@ return function(Hub: any)
 		-- 6. restore defaults
 		restoreDefaults()
 
-		-- 7. restore defaults already ran; afterUnload then drop identity
-		if Hub.Lifecycle and Hub.Lifecycle.emit then
-			pcall(function()
-				Hub.Lifecycle.emit("afterUnload")
-			end)
-		end
 		removeGlobals()
 
 		-- 8. clear registration tables
@@ -360,7 +343,6 @@ return function(Hub: any)
 	Hub.trackPage = trackPage
 	Hub.holdDebris = holdDebris
 	Hub.clearPageScope = clearPageScope
-	Hub.PageScope = Pages
 	Hub.Pages = Pages
 	Hub.isHubInstance = isHubInstance
 	Hub.Unload = Unload

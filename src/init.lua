@@ -1,6 +1,5 @@
 --!strict
--- TroyHub entry. The bundler inlines every module above this file and
--- provides import(name). Studio can swap import for require.
+-- TroyHub entry. Bundler inlines src modules and provides import(name).
 
 return function(import: (string) -> any)
 	local Players = game:GetService("Players")
@@ -22,7 +21,6 @@ return function(import: (string) -> any)
 	end
 	local playerGui = player:WaitForChild("PlayerGui")
 
-	-- Previous inject: deterministic unload first, then the guard.
 	pcall(function()
 		local prev = (shared :: any).TroyHub
 		if prev and type(prev.Unload) == "function" then
@@ -80,20 +78,18 @@ return function(import: (string) -> any)
 		factory(Hub)
 	end
 
-	load("utils")
-	load("logger")
-	load("data")
-	load("constants")
-	load("state")
-	load("theme")
-	load("cleanup")
-	load("tasks")
-	load("scheduler")
-	load("lifecycle")
-	load("featureManager")
-	load("features")
-	load("hotkeys")
-	load("diagnostics")
+	load("core/utils")
+	load("core/logger")
+	load("config/data")
+	load("core/constants")
+	load("core/state")
+	load("core/theme")
+	load("core/cleanup")
+	load("core/tasks")
+	load("core/scheduler")
+	load("core/lifecycle")
+	load("core/featureManager")
+	load("core/hotkeys")
 
 	Hub.Scheduler.start()
 	Hub.Scheduler.add("framerate", "render", 0, function(dt)
@@ -107,9 +103,9 @@ return function(import: (string) -> any)
 	load("features/esp")
 	load("features/combat")
 	load("features/farming")
-	load("app")
-	load("config")
-	load("gui")
+	load("ui/app")
+	load("config/config")
+	load("ui/gui")
 
 	if Hub.Hotkeys then
 		pcall(function()
@@ -119,12 +115,6 @@ return function(import: (string) -> any)
 
 	Hub.bindGlobals()
 	Hub.installKillSwitch()
-	if Hub.Diagnostics and Hub.Diagnostics.start then
-		pcall(Hub.Diagnostics.start)
-	end
-	if Hub.Lifecycle and Hub.Lifecycle.emit then
-		Hub.Lifecycle.emit("ready")
-	end
 
 	if Hub.log then
 		local n = 0
