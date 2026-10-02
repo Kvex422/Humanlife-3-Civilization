@@ -91,7 +91,9 @@ return function(import: (string) -> any)
 	load("scheduler")
 	load("lifecycle")
 	load("featureManager")
+	load("features")
 	load("hotkeys")
+	load("diagnostics")
 
 	Hub.Scheduler.start()
 	Hub.Scheduler.add("framerate", "render", 0, function(dt)
@@ -120,6 +122,12 @@ return function(import: (string) -> any)
 
 	Hub.bindGlobals()
 	Hub.installKillSwitch()
+	if Hub.Diagnostics and Hub.Diagnostics.start then
+		pcall(Hub.Diagnostics.start)
+	end
+	if Hub.Lifecycle and Hub.Lifecycle.emit then
+		Hub.Lifecycle.emit("ready")
+	end
 
 	if Hub.log then
 		local n = 0

@@ -3,14 +3,14 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.2",
+		script = "2.0.3",
 		configSchema = 2,
 		builtAt = "2026-10-02",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.3  Feature registry, lifecycle bus, diagnostics module, persistence facade.",
 			"2.0.2  Tracked delays, theme binds, scheduler ownership, shared-only namespace.",
 			"2.0.1  Lifecycle bus, FeatureManager routing, diagnostics page, src on GitHub.",
-			"2.0.0  Modular split, feature registry, injection guard, Unload pipeline.",
 		},
 	}
 

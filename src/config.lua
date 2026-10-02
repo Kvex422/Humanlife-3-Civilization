@@ -86,6 +86,63 @@ return function(Hub: any)
 		end
 	end
 
+	local Persistence = {}
+	local ATTR_SCHEMA = "TroyHubConfigSchema"
+	local ATTR_SAVED = "TroyHubSavedAt"
+
+	local function stampPlayer()
+		pcall(function()
+			Hub.player:SetAttribute(ATTR_SCHEMA, Hub.Version and Hub.Version.configSchema or 2)
+			Hub.player:SetAttribute(ATTR_SAVED, os.time())
+		end)
+	end
+
+	function Persistence.save(): boolean
+		local ok = false
+		if Hub.Config and Hub.Config.save then
+			ok = Hub.Config.save() == true
+		end
+		if ok then
+			stampPlayer()
+		end
+		return ok
+	end
+
+	function Persistence.load(): boolean
+		if Hub.Config and Hub.Config.load then
+			return Hub.Config.load() == true
+		end
+		return false
+	end
+
+	function Persistence.reload()
+		ConfigX.reload()
+	end
+
+	function Persistence.export(): string?
+		if Hub.Config and Hub.Config.serialize then
+			return Hub.Config.serialize()
+		end
+		return nil
+	end
+
+	function Persistence.applyProfile(name: string, notify: boolean?)
+		ConfigX.applyProfile(name, notify)
+		if Hub.Config and Hub.Config.save then
+			pcall(Hub.Config.save)
+		end
+		stampPlayer()
+	end
+
+	function Persistence.lastSavedAt(): number?
+		local v = Hub.player:GetAttribute(ATTR_SAVED)
+		if type(v) == "number" then
+			return v
+		end
+		return nil
+	end
+
 	Hub.ConfigX = ConfigX
+	Hub.Persistence = Persistence
 	return Hub
 end

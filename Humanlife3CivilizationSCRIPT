@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.2 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.3 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -249,6 +249,9 @@ return function(Hub: any)
 			Hub.Diagnostics = Hub.Diagnostics or {}
 			Hub.Diagnostics.LastError = line
 			Hub.Diagnostics.LastErrorAt = os.clock()
+			if Hub.Diagnostics.noteError then
+				pcall(Hub.Diagnostics.noteError, line)
+			end
 			local Notifications = Hub.Notifications
 			if Notifications and Notifications.error then
 				pcall(function()
@@ -293,14 +296,14 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.2",
+		script = "2.0.3",
 		configSchema = 2,
 		builtAt = "2026-10-02",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.3  Feature registry, lifecycle bus, diagnostics module, persistence facade.",
 			"2.0.2  Tracked delays, theme binds, scheduler ownership, shared-only namespace.",
 			"2.0.1  Lifecycle bus, FeatureManager routing, diagnostics page, src on GitHub.",
-			"2.0.0  Modular split, feature registry, injection guard, Unload pipeline.",
 		},
 	}
 
@@ -1133,6 +1136,11 @@ return function(Hub: any)
 		end
 		Flags.Unloading = true
 		Flags.Closing = false
+		if Hub.Lifecycle and Hub.Lifecycle.emit then
+			pcall(function()
+				Hub.Lifecycle.emit("unload")
+			end)
+		end
 		if Hub.Tasks then
 			pcall(function()
 				Hub.Tasks.cancelAll()
@@ -1701,6 +1709,40 @@ return function(Hub: any)
 		end,
 	}
 
+	local events: { [string]: { (...any) -> () } } = {}
+
+	function Hub.Lifecycle.on(name: string, fn: (...any) -> ())
+		local list = events[name]
+		if not list then
+			list = {}
+			events[name] = list
+		end
+		table.insert(list, fn)
+		return fn
+	end
+
+	function Hub.Lifecycle.emit(name: string, ...)
+		local list = events[name]
+		if not list then
+			return
+		end
+		for _, fn in list do
+			pcall(fn, ...)
+		end
+	end
+
+	function Hub.Lifecycle.onUnload(fn: () -> ())
+		return Hub.Lifecycle.on("unload", fn)
+	end
+
+	function Hub.Lifecycle.onReady(fn: () -> ())
+		return Hub.Lifecycle.on("ready", fn)
+	end
+
+	Hub.Lifecycle.onCharacter(function()
+		Hub.Lifecycle.emit("respawn")
+	end)
+
 	return Hub
 end
     end)
@@ -1734,6 +1776,11 @@ return function(Hub: any)
 			table.insert(order, spec.name)
 		end
 		registry[spec.name] = spec
+		if spec.cleanup and Hub.Lifecycle and Hub.Lifecycle.onUnload then
+			Hub.Lifecycle.onUnload(function()
+				pcall(spec.cleanup)
+			end)
+		end
 	end
 
 	function FeatureManager.get(name: string): Feature?
@@ -1864,6 +1911,56 @@ return function(Hub: any)
 	end
 
 	Hub.FeatureManager = FeatureManager
+	return Hub
+end
+    end)
+
+    def("features", function()
+-- Public feature registry. Features declare enable / disable / cleanup once;
+-- UI, hotkeys, Unload, and diagnostics all go through this API.
+
+return function(Hub: any)
+	local FM = Hub.FeatureManager
+	if not FM then
+		return Hub
+	end
+
+	local Registry = {}
+
+	function Registry.declare(spec: any)
+		FM.register(spec)
+		return spec.name
+	end
+
+	function Registry.enable(name: string, notify: boolean?)
+		FM.set(name, true, notify)
+	end
+
+	function Registry.disable(name: string, notify: boolean?)
+		FM.set(name, false, notify)
+	end
+
+	function Registry.toggle(name: string, notify: boolean?)
+		FM.set(name, not FM.isEnabled(name), if notify == nil then true else notify)
+	end
+
+	function Registry.isEnabled(name: string): boolean
+		return FM.isEnabled(name)
+	end
+
+	function Registry.list(): { string }
+		return FM.list()
+	end
+
+	function Registry.active(): { string }
+		return FM.active()
+	end
+
+	function Registry.get(name: string)
+		return FM.get(name)
+	end
+
+	Hub.Registry = Registry
 	return Hub
 end
     end)
@@ -2039,6 +2136,95 @@ return function(Hub: any)
 end
     end)
 
+    def("diagnostics", function()
+-- Control-center snapshot: features, jobs, signals, errors, FPS, ping.
+
+return function(Hub: any)
+	local Stats = Hub.Services.Stats
+	local bag = Hub.Diagnostics or {}
+	bag.LastError = bag.LastError or ""
+	bag.LastWarn = bag.LastWarn or ""
+	bag.History = bag.History or {}
+
+	local function pushHistory(kind: string, line: string)
+		table.insert(bag.History, 1, {
+			kind = kind,
+			line = line,
+			at = os.clock(),
+		})
+		while #bag.History > 24 do
+			table.remove(bag.History)
+		end
+	end
+
+	function bag.noteError(line: string)
+		bag.LastError = line
+		bag.LastErrorAt = os.clock()
+		pushHistory("error", line)
+	end
+
+	function bag.noteWarn(line: string)
+		bag.LastWarn = line
+		pushHistory("warn", line)
+	end
+
+	function bag.snapshot(): { [string]: any }
+		local ping = Hub.getPingMs and Hub.getPingMs() or 0
+		local fps = Hub.FrameRate and Hub.FrameRate.fps or 0
+		local mem = 0
+		pcall(function()
+			mem = Stats:GetTotalMemoryUsageMb()
+		end)
+		local jobs = {}
+		if Hub.Scheduler and Hub.Scheduler.snapshot then
+			jobs = Hub.Scheduler.snapshot()
+		end
+		local isolated = 0
+		for _, job in jobs do
+			if job.disabled then
+				isolated += 1
+			end
+		end
+		return {
+			version = Hub.Version and Hub.Version.script or "?",
+			schema = Hub.Version and Hub.Version.configSchema or 0,
+			page = Hub.Flags.ActivePage,
+			uptime = os.clock() - (Hub.Flags.StartedAt or os.clock()),
+			fps = fps,
+			ping = ping,
+			memoryMb = mem,
+			jobs = Hub.Scheduler and Hub.Scheduler.count and Hub.Scheduler.count() or 0,
+			isolatedJobs = isolated,
+			jobHealth = jobs,
+			features = Hub.Registry and Hub.Registry.active() or (Hub.FeatureManager and Hub.FeatureManager.active() or {}),
+			declared = Hub.Registry and Hub.Registry.list() or {},
+			signals = Hub.Connections and #Hub.Connections or 0,
+			lastError = bag.LastError,
+			lastWarn = bag.LastWarn,
+			history = bag.History,
+			unloading = Hub.Flags.Unloading == true,
+			safe = Hub.State and Hub.State.SafeMode or false,
+			panic = Hub.State and Hub.State.PanicMode or false,
+		}
+	end
+
+	function bag.start()
+		if not Hub.Scheduler then
+			return
+		end
+		Hub.Scheduler.add("diagnostics", "logic", 1, function()
+			if Hub.Flags.Unloading then
+				return
+			end
+			bag.LastSnap = bag.snapshot()
+		end, { priority = 90, budget = 0.004, owner = "Diagnostics" })
+	end
+
+	Hub.Diagnostics = bag
+	return Hub
+end
+    end)
+
     def("app", function()
 -- Runtime body: GUI, features, farm, ESP, combat. Framework services come from Hub.
 return function(Hub: any)
@@ -2203,7 +2389,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.2",
+    Text = "Humanlife 3: Civilization   ·   2.0.3",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -7601,7 +7787,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.2 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.3 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.Features = Features
     Hub.FEATURE_SETTERS = FEATURE_SETTERS
@@ -7768,7 +7954,64 @@ return function(Hub: any)
 		end
 	end
 
+	local Persistence = {}
+	local ATTR_SCHEMA = "TroyHubConfigSchema"
+	local ATTR_SAVED = "TroyHubSavedAt"
+
+	local function stampPlayer()
+		pcall(function()
+			Hub.player:SetAttribute(ATTR_SCHEMA, Hub.Version and Hub.Version.configSchema or 2)
+			Hub.player:SetAttribute(ATTR_SAVED, os.time())
+		end)
+	end
+
+	function Persistence.save(): boolean
+		local ok = false
+		if Hub.Config and Hub.Config.save then
+			ok = Hub.Config.save() == true
+		end
+		if ok then
+			stampPlayer()
+		end
+		return ok
+	end
+
+	function Persistence.load(): boolean
+		if Hub.Config and Hub.Config.load then
+			return Hub.Config.load() == true
+		end
+		return false
+	end
+
+	function Persistence.reload()
+		ConfigX.reload()
+	end
+
+	function Persistence.export(): string?
+		if Hub.Config and Hub.Config.serialize then
+			return Hub.Config.serialize()
+		end
+		return nil
+	end
+
+	function Persistence.applyProfile(name: string, notify: boolean?)
+		ConfigX.applyProfile(name, notify)
+		if Hub.Config and Hub.Config.save then
+			pcall(Hub.Config.save)
+		end
+		stampPlayer()
+	end
+
+	function Persistence.lastSavedAt(): number?
+		local v = Hub.player:GetAttribute(ATTR_SAVED)
+		if type(v) == "number" then
+			return v
+		end
+		return nil
+	end
+
 	Hub.ConfigX = ConfigX
+	Hub.Persistence = Persistence
 	return Hub
 end
     end)
@@ -7807,6 +8050,9 @@ return function(Hub: any)
 	end
 
 	function Gui.diagnostics(): { [string]: any }
+		if Hub.Diagnostics and Hub.Diagnostics.snapshot then
+			return Hub.Diagnostics.snapshot()
+		end
 		local State = Hub.State
 		local ping = Hub.getPingMs and Hub.getPingMs() or 0
 		local fps = Hub.FrameRate and Hub.FrameRate.fps or 0
@@ -8377,7 +8623,9 @@ return function(import: (string) -> any)
 	load("scheduler")
 	load("lifecycle")
 	load("featureManager")
+	load("features")
 	load("hotkeys")
+	load("diagnostics")
 
 	Hub.Scheduler.start()
 	Hub.Scheduler.add("framerate", "render", 0, function(dt)
@@ -8406,6 +8654,12 @@ return function(import: (string) -> any)
 
 	Hub.bindGlobals()
 	Hub.installKillSwitch()
+	if Hub.Diagnostics and Hub.Diagnostics.start then
+		pcall(Hub.Diagnostics.start)
+	end
+	if Hub.Lifecycle and Hub.Lifecycle.emit then
+		Hub.Lifecycle.emit("ready")
+	end
 
 	if Hub.log then
 		local n = 0

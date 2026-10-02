@@ -32,6 +32,9 @@ return function(Hub: any)
 	end
 
 	function Gui.diagnostics(): { [string]: any }
+		if Hub.Diagnostics and Hub.Diagnostics.snapshot then
+			return Hub.Diagnostics.snapshot()
+		end
 		local State = Hub.State
 		local ping = Hub.getPingMs and Hub.getPingMs() or 0
 		local fps = Hub.FrameRate and Hub.FrameRate.fps or 0

@@ -27,6 +27,11 @@ return function(Hub: any)
 			table.insert(order, spec.name)
 		end
 		registry[spec.name] = spec
+		if spec.cleanup and Hub.Lifecycle and Hub.Lifecycle.onUnload then
+			Hub.Lifecycle.onUnload(function()
+				pcall(spec.cleanup)
+			end)
+		end
 	end
 
 	function FeatureManager.get(name: string): Feature?

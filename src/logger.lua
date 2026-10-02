@@ -53,6 +53,9 @@ return function(Hub: any)
 			Hub.Diagnostics = Hub.Diagnostics or {}
 			Hub.Diagnostics.LastError = line
 			Hub.Diagnostics.LastErrorAt = os.clock()
+			if Hub.Diagnostics.noteError then
+				pcall(Hub.Diagnostics.noteError, line)
+			end
 			local Notifications = Hub.Notifications
 			if Notifications and Notifications.error then
 				pcall(function()

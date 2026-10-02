@@ -211,6 +211,11 @@ return function(Hub: any)
 		end
 		Flags.Unloading = true
 		Flags.Closing = false
+		if Hub.Lifecycle and Hub.Lifecycle.emit then
+			pcall(function()
+				Hub.Lifecycle.emit("unload")
+			end)
+		end
 		if Hub.Tasks then
 			pcall(function()
 				Hub.Tasks.cancelAll()

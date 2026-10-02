@@ -19,7 +19,9 @@ $modules = @(
     "scheduler",
     "lifecycle",
     "featureManager",
+    "features",
     "hotkeys",
+    "diagnostics",
     "app",
     "config",
     "gui",
@@ -39,7 +41,7 @@ function Get-ModuleSource([string]$rel) {
 
 $sb = New-Object System.Text.StringBuilder
 [void]$sb.AppendLine("--!strict")
-[void]$sb.AppendLine("-- TroyHub 2.0.2 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.")
+[void]$sb.AppendLine("-- TroyHub 2.0.3 bundled from src/*.lua. Edit modules and re-run tools/bundle.ps1.")
 [void]$sb.AppendLine("local function __troyDefPack()")
 [void]$sb.AppendLine("    local pack = {}")
 [void]$sb.AppendLine("    local function def(name, factory)")

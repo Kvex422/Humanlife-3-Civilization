@@ -144,5 +144,39 @@ return function(Hub: any)
 		end,
 	}
 
+	local events: { [string]: { (...any) -> () } } = {}
+
+	function Hub.Lifecycle.on(name: string, fn: (...any) -> ())
+		local list = events[name]
+		if not list then
+			list = {}
+			events[name] = list
+		end
+		table.insert(list, fn)
+		return fn
+	end
+
+	function Hub.Lifecycle.emit(name: string, ...)
+		local list = events[name]
+		if not list then
+			return
+		end
+		for _, fn in list do
+			pcall(fn, ...)
+		end
+	end
+
+	function Hub.Lifecycle.onUnload(fn: () -> ())
+		return Hub.Lifecycle.on("unload", fn)
+	end
+
+	function Hub.Lifecycle.onReady(fn: () -> ())
+		return Hub.Lifecycle.on("ready", fn)
+	end
+
+	Hub.Lifecycle.onCharacter(function()
+		Hub.Lifecycle.emit("respawn")
+	end)
+
 	return Hub
 end

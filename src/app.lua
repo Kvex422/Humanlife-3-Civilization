@@ -162,7 +162,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.2",
+    Text = "Humanlife 3: Civilization   ·   2.0.3",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -5560,7 +5560,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.2 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.3 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.Features = Features
     Hub.FEATURE_SETTERS = FEATURE_SETTERS
