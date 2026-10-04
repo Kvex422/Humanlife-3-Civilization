@@ -161,7 +161,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.5",
+    Text = "Humanlife 3: Civilization   ·   2.0.6",
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -1319,11 +1319,7 @@ function ResourceScanner.discover()
     ResourceScanner.pulse(220)
     local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
     if root and root:IsA("BasePart") then
-        ResourceScanner.ingest(root.Position, 240)
-    end
-    local cam = workspace.CurrentCamera
-    if cam then
-        ResourceScanner.ingest(cam.CFrame.Position + cam.CFrame.LookVector * 90, 180)
+        ResourceScanner.ingest(root.Position, 420)
     end
     if now - farmStore.lastCompact > 4 then
         farmStore.lastCompact = now
@@ -3730,6 +3726,8 @@ end
 local Pin = { since = 0, restUntil = 0, drifted = 0 }
 
 local function pinAllowed(): boolean
+    -- Teleport Gather must stay planted or the stand pose walks around the node.
+    if State.TeleportGather and Farm.mining then return true end
     if State.UsePin ~= true then return false end
     -- Never drop the pin mid-cluster. High ping plus an unanchored CFrame hold
     -- is exactly the slide-off you already solved with the pin.
@@ -4085,11 +4083,10 @@ local function nextTravelTarget()
     if not root then return nil end
     local myPos = root.Position
     local now = os.clock()
-    local bestScreen, bestScreenScore = nil, math.huge
-    local bestWorld, bestWorldScore = nil, math.huge
-    -- Rings again, but every ring is scored: a far ring may still hold the
-    -- best node once priority is weighed in, so unlike nearestListed this does
-    -- not stop at the first hit.
+    local best, bestScore = nil, math.huge
+    -- Player-root only. Camera view used to steal the pick when you were
+    -- zoomed in on a far tree, so the farm walked toward look-at instead of
+    -- what was underfoot.
     local widest = NEAREST_RINGS[#NEAREST_RINGS]
     ResourceScanner.queryRadius(myPos, widest, function(e)
         if not e.inst.Parent then return end
@@ -4102,22 +4099,12 @@ local function nextTravelTarget()
         local dz = pos.Z - myPos.Z
         local dist = math.sqrt(dx * dx + dz * dz)
         local score = nodeScore(e.kind, dist)
-        if onScreen(pos) then
-            if score < bestScreenScore then
-                bestScreen = { inst = e.inst, kind = e.kind, dist = dist, pos = pos }
-                bestScreenScore = score
-            end
-        elseif score < bestWorldScore then
-            bestWorld = { inst = e.inst, kind = e.kind, dist = dist, pos = pos }
-            bestWorldScore = score
+        if score < bestScore then
+            bestScore = score
+            best = { inst = e.inst, kind = e.kind, dist = dist, pos = pos }
         end
     end)
-    -- Prefer what is already in view unless an off-screen node is markedly
-    -- better, which is what lets a gold vein pull you off a tree line.
-    if bestScreen and bestWorld and bestWorldScore < bestScreenScore - 150 then
-        return bestWorld
-    end
-    return bestScreen or bestWorld
+    return best
 end
 
 -- Selling fires one remote per selected type. Without a cooldown this ran
@@ -4243,18 +4230,8 @@ end
 
 local lastFireLog = 0
 local lastFireAt = 0
-local function fireGather(inst: Instance): boolean
-    local remote = GatherRemote
-    if not remote or not remote.Parent then return false end
-    -- Spread bursts with a little jitter instead of dumping a whole cluster
-    -- into one frame.
-    local gap = os.clock() - lastFireAt
-    local floor = math.max(fireFloor(), hitGap())
-    if gap < floor then
-        task.wait(floor - gap + math.random() * math.min(0.04, floor * 0.15))
-    end
-    lastFireAt = os.clock()
-    local target = folderChild(inst) or inst
+
+local function fireGatherOnce(remote: Instance, target: Instance): boolean
     local ok, err
     if remote:IsA("RemoteEvent") then
         ok, err = pcall(function()
@@ -4268,7 +4245,6 @@ local function fireGather(inst: Instance): boolean
         return false
     end
     if not ok then
-        -- Throttled: a bad remote used to spam the log every swing.
         local now = os.clock()
         if now - lastFireLog > 2 then
             lastFireLog = now
@@ -4276,8 +4252,32 @@ local function fireGather(inst: Instance): boolean
         end
         return false
     end
-    FarmStats.noteSwing()
     return true
+end
+
+local function fireGather(inst: Instance): boolean
+    local remote = GatherRemote
+    if not remote or not remote.Parent then return false end
+    local gap = os.clock() - lastFireAt
+    local floor = hitGap()
+    if gap < floor then
+        task.wait(floor - gap)
+    end
+    lastFireAt = os.clock()
+    local model = folderChild(inst) or inst
+    local part = liveHarvestPart(inst)
+    local hit = fireGatherOnce(remote, model)
+    -- Same swing, second target: the harvest part if the server keys on that
+    -- instead of the folder child. Then a repeat on the model so one Hit Delay
+    -- tick is two remotes, not one sound with no extra yield.
+    if part and part ~= model then
+        fireGatherOnce(remote, part)
+    end
+    if hit then
+        fireGatherOnce(remote, model)
+        FarmStats.noteSwing()
+    end
+    return hit
 end
 
 local function clusterInRange(radius: number)
@@ -4372,7 +4372,10 @@ local function snapTeleport(obj: Instance?, treePos: Vector3)
     local root = getRoot()
     local char = player.Character
     if not root or not char then return false end
-    local dest = standBeside(obj, root.Position, treePos)
+    local dest = Farm.dest
+    if not dest then
+        dest = standBeside(obj, root.Position, treePos)
+    end
     Farm.dest = dest
     Farm.look = treePos
     local far = (dest - root.Position).Magnitude > 10
@@ -4405,7 +4408,7 @@ local function snapTeleport(obj: Instance?, treePos: Vector3)
         r.AssemblyAngularVelocity = Vector3.zero
         r.CFrame = flatLook(dest, treePos)
     end)
-    if pinAllowed() then lockMovement() end
+    lockMovement()
     root = getRoot()
     if root then
         root.CFrame = flatLook(dest, treePos)
@@ -4416,8 +4419,13 @@ end
 local function pinAt(obj: Instance?, treePos: Vector3)
     local root = getRoot()
     if not root then return end
-    local dest = standBeside(obj, root.Position, treePos)
-    Farm.dest = dest
+    -- Recomputing standBeside from the current root walks you around the
+    -- trunk. Keep the first landing pose for the whole drain.
+    local dest = Farm.dest
+    if not dest then
+        dest = standBeside(obj, root.Position, treePos)
+        Farm.dest = dest
+    end
     Farm.look = treePos
     -- Measured before we correct it: this is how far the last pass drifted,
     -- which is the only honest signal for whether unanchored holding works.
@@ -4471,7 +4479,10 @@ local function drainUntilGone(radius: number, inst: Instance?, pos: Vector3?, ke
         if aim then pinAt(inst, aim) end
         local targetLive = inst ~= nil and inst.Parent ~= nil
         if targetLive and inst then
-            if fireGather(inst) then fired += 1 end
+            for _ = 1, SWINGS do
+                if not keepGoing() or not inst.Parent then break end
+                if fireGather(inst) then fired += 1 end
+            end
         end
         -- One scan per pass. This used to walk the whole resource index twice
         -- every 0.12s, which is what made dense areas chug.
@@ -4699,25 +4710,29 @@ local function farmPass()
     else
         local localLive = listedNearby(fireRadius, 1)
         if localLive[1] then
+            Farm.dest = nil
             drainUntilGone(fireRadius, localLive[1].inst, localLive[1].pos, keep, "Mining")
             rememberCluster(localLive[1].inst, localLive[1].pos)
             doAutoSell()
             unlockMovement()
+            Farm.dest = nil
             return
         end
     end
 
     local target = nextTravelTarget()
     if not target then
-        setFarmStatus("Looking for listed nodes in view / world…", Theme.Warn)
+        setFarmStatus("Looking for listed nodes near you…", Theme.Warn)
         return
     end
     setFarmStatus(
         string.format("Teleport\n%s  ·  %.0f studs", target.inst.Name, target.dist),
         Theme.Accent
     )
+    Farm.dest = nil
     local rootNow = getRoot()
     local dest = if rootNow then standBeside(target.inst, rootNow.Position, target.pos) else target.pos
+    Farm.dest = dest
     if not rootNow or not inStandRange(rootNow.Position, dest) then
         snapTeleport(target.inst, target.pos)
     else
@@ -4775,7 +4790,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.5 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.6 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature

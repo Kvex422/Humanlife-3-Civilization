@@ -3,11 +3,12 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.5",
+		script = "2.0.6",
 		configSchema = 2,
-		builtAt = "2026-10-02",
+		builtAt = "2026-10-03",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.6  Teleport Gather pins in place, farm picks from the player not the camera, gather burst per swing.",
 			"2.0.5  Hub layout (core/features/ui/config). Simple registry and lifecycle. JSON settings only.",
 			"2.0.4  Registry-only toggles, feature bodies in src/features, Config JSON module.",
 			"2.0.3  Feature registry, lifecycle, diagnostics, persistence.",
