@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.7 bundled from src/. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.8 bundled from src/. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -297,11 +297,12 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.7",
+		script = "2.0.8",
 		configSchema = 2,
 		builtAt = "2026-10-04",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.8  Player ESP skeleton, chams, deaths/gold/job/age. Resource health bar.",
 			"2.0.7  Overpower: same-tick gather burst, learned payload, client power spoof.",
 			"2.0.6  Teleport Gather pins in place, farm picks from the player not the camera, gather burst per swing.",
 			"2.0.5  Hub layout (core/features/ui/config). Simple registry and lifecycle. JSON settings only.",
@@ -488,15 +489,23 @@ return function(Hub: any)
 		SellArgStyle = "name_amount",
 		PlayerESP = false,
 		PlayerBox = true,
+		PlayerSkeleton = true,
+		PlayerChams = true,
 		PlayerName = true,
 		PlayerDistance = true,
 		PlayerHealth = true,
 		PlayerHealthText = false,
+		PlayerDeaths = true,
+		PlayerGold = true,
+		PlayerJob = true,
+		PlayerAge = true,
 		PlayerMaxDist = 700,
 		ResourceESP = false,
 		ResourceBox = true,
 		ResourceName = true,
 		ResourceDistance = true,
+		ResourceHealth = true,
+		ResourceHealthText = false,
 		ResourceMaxDist = 500,
 		ResourceLimit = 80,
 		PriorityWeight = 40,
@@ -583,16 +592,24 @@ return function(Hub: any)
 
 		PlayerESP = false,
 		PlayerBox = true,
+		PlayerSkeleton = true,
+		PlayerChams = true,
 		PlayerName = true,
 		PlayerDistance = true,
 		PlayerHealth = true,
 		PlayerHealthText = false,
+		PlayerDeaths = true,
+		PlayerGold = true,
+		PlayerJob = true,
+		PlayerAge = true,
 		PlayerMaxDist = 700,
 
 		ResourceESP = false,
 		ResourceBox = true,
 		ResourceName = true,
 		ResourceDistance = true,
+		ResourceHealth = true,
+		ResourceHealthText = false,
 		ResourceMaxDist = 500,
 		ResourceLimit = 80,
 		ResourceTypeFilter = {
@@ -4832,30 +4849,38 @@ Pages["Visuals"] = function()
     local y = 0
 
     sectionTitle("Player ESP", y); y += 30
-    local c1 = card(y, 12 + 8 * 38 + 12); y += 12 + 8 * 38 + 20
+    local c1 = card(y, 536); y += 546
     toggleRow(c1, "Player ESP", 12, State.PlayerESP, function(v)
         setFeature("PlayerESP", v, true)
     end)
     toggleRow(c1, "Box", 50, State.PlayerBox, function(v) State.PlayerBox = v end)
-    toggleRow(c1, "Name", 88, State.PlayerName, function(v) State.PlayerName = v end)
-    toggleRow(c1, "Distance", 126, State.PlayerDistance, function(v) State.PlayerDistance = v end)
-    toggleRow(c1, "Health Bar", 164, State.PlayerHealth, function(v) State.PlayerHealth = v end)
-    toggleRow(c1, "Health Text", 202, State.PlayerHealthText, function(v) State.PlayerHealthText = v end)
-    sliderRow(c1, "ESP Max Distance", 240, 50, 2000, State.PlayerMaxDist, " studs", function(v) State.PlayerMaxDist = v end)
+    toggleRow(c1, "Skeleton", 88, State.PlayerSkeleton, function(v) State.PlayerSkeleton = v end)
+    toggleRow(c1, "Chams", 126, State.PlayerChams, function(v) State.PlayerChams = v end)
+    toggleRow(c1, "Name", 164, State.PlayerName, function(v) State.PlayerName = v end)
+    toggleRow(c1, "Distance", 202, State.PlayerDistance, function(v) State.PlayerDistance = v end)
+    toggleRow(c1, "Health Bar", 240, State.PlayerHealth, function(v) State.PlayerHealth = v end)
+    toggleRow(c1, "Health Text", 278, State.PlayerHealthText, function(v) State.PlayerHealthText = v end)
+    toggleRow(c1, "Deaths", 316, State.PlayerDeaths, function(v) State.PlayerDeaths = v end)
+    toggleRow(c1, "Gold", 354, State.PlayerGold, function(v) State.PlayerGold = v end)
+    toggleRow(c1, "Job", 392, State.PlayerJob, function(v) State.PlayerJob = v end)
+    toggleRow(c1, "Age", 430, State.PlayerAge, function(v) State.PlayerAge = v end)
+    sliderRow(c1, "ESP Max Distance", 468, 50, 2000, State.PlayerMaxDist, " studs", function(v) State.PlayerMaxDist = v end)
 
     sectionTitle("Resource ESP", y); y += 30
-    local c2 = card(y, 12 + 8 * 38 + 12); y += 12 + 8 * 38 + 20
+    local c2 = card(y, 430); y += 440
     toggleRow(c2, "Resource ESP", 12, State.ResourceESP, function(v)
         setFeature("ResourceESP", v, true)
     end)
     toggleRow(c2, "Box", 50, State.ResourceBox, function(v) State.ResourceBox = v end)
     toggleRow(c2, "Name", 88, State.ResourceName, function(v) State.ResourceName = v end)
     toggleRow(c2, "Distance", 126, State.ResourceDistance, function(v) State.ResourceDistance = v end)
-    dropdownRow(c2, "Resources", 164, RESOURCE_LIST,
+    toggleRow(c2, "Health Bar", 164, State.ResourceHealth, function(v) State.ResourceHealth = v end)
+    toggleRow(c2, "Health Text", 202, State.ResourceHealthText, function(v) State.ResourceHealthText = v end)
+    dropdownRow(c2, "Resources", 240, RESOURCE_LIST,
         function() return State.ResourceTypeFilter end,
         function(sel) State.ResourceTypeFilter = sel end)
-    sliderRow(c2, "Max Distance", 212, 25, 1000, State.ResourceMaxDist, " studs", function(v) State.ResourceMaxDist = v end)
-    sliderRow(c2, "Max Tracked At Once", 270, 5, 200, State.ResourceLimit, "", function(v) State.ResourceLimit = v end)
+    sliderRow(c2, "Max Distance", 298, 25, 1000, State.ResourceMaxDist, " studs", function(v) State.ResourceMaxDist = v end)
+    sliderRow(c2, "Max Tracked At Once", 356, 5, 200, State.ResourceLimit, "", function(v) State.ResourceLimit = v end)
 
     sectionTitle("Lighting", y); y += 30
     local c3 = card(y, 130); y += 140
@@ -6136,6 +6161,32 @@ do
 
     local PLAYER_COLOR = Color3.fromRGB(255, 90, 110)
     local RESOURCE_COLOR = Color3.fromRGB(80, 220, 140)
+    local BONE_COUNT = 14
+    local CHAM_CAP = 20
+    local chamCount = 0
+    local R15_BONES = {
+        { "Head", "UpperTorso" },
+        { "UpperTorso", "LowerTorso" },
+        { "UpperTorso", "LeftUpperArm" },
+        { "LeftUpperArm", "LeftLowerArm" },
+        { "LeftLowerArm", "LeftHand" },
+        { "UpperTorso", "RightUpperArm" },
+        { "RightUpperArm", "RightLowerArm" },
+        { "RightLowerArm", "RightHand" },
+        { "LowerTorso", "LeftUpperLeg" },
+        { "LeftUpperLeg", "LeftLowerLeg" },
+        { "LeftLowerLeg", "LeftFoot" },
+        { "LowerTorso", "RightUpperLeg" },
+        { "RightUpperLeg", "RightLowerLeg" },
+        { "RightLowerLeg", "RightFoot" },
+    }
+    local R6_BONES = {
+        { "Head", "Torso" },
+        { "Torso", "Left Arm" },
+        { "Torso", "Right Arm" },
+        { "Torso", "Left Leg" },
+        { "Torso", "Right Leg" },
+    }
 
     local function buildDrawing(color)
         local holder = new("Frame", {
@@ -6157,10 +6208,11 @@ do
         })
         new("UIStroke", { Color = Color3.new(0,0,0), Thickness = 1, Transparency = 0.5, Parent = healthBg })
         local nameLabel = new("TextLabel", {
-            Name = "NameLabel", Size = UDim2.new(0, 160, 0, 14),
+            Name = "NameLabel", Size = UDim2.new(0, 180, 0, 14),
             BackgroundTransparency = 1, Font = Theme.FontBold,
             Text = "", TextColor3 = color, TextSize = 12,
             TextStrokeTransparency = 0.5, TextStrokeColor3 = Color3.new(0,0,0),
+            TextXAlignment = Enum.TextXAlignment.Center,
             Visible = false, ZIndex = 6, Parent = holder,
         })
         local distLabel = new("TextLabel", {
@@ -6168,20 +6220,54 @@ do
             BackgroundTransparency = 1, Font = Theme.Font,
             Text = "", TextColor3 = color, TextSize = 11,
             TextStrokeTransparency = 0.5, TextStrokeColor3 = Color3.new(0,0,0),
+            TextXAlignment = Enum.TextXAlignment.Center,
             Visible = false, ZIndex = 6, Parent = holder,
         })
         local extraLabel = new("TextLabel", {
-            Name = "ExtraLabel", Size = UDim2.new(0, 200, 0, 12),
+            Name = "ExtraLabel", Size = UDim2.new(0, 160, 0, 12),
             BackgroundTransparency = 1, Font = Theme.Font,
-            Text = "", TextColor3 = color, TextSize = 10,
-            TextStrokeTransparency = 0.5, TextStrokeColor3 = Color3.new(0,0,0),
+            Text = "", TextColor3 = color, TextSize = 11,
+            TextStrokeTransparency = 0.4, TextStrokeColor3 = Color3.new(0,0,0),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            TextYAlignment = Enum.TextYAlignment.Top,
             Visible = false, ZIndex = 6, Parent = holder,
         })
+        local bones = {}
+        for i = 1, BONE_COUNT do
+            bones[i] = new("Frame", {
+                Name = "Bone" .. i,
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Size = UDim2.fromOffset(0, 1),
+                BackgroundColor3 = color,
+                BorderSizePixel = 0,
+                Visible = false,
+                ZIndex = 4,
+                Parent = holder,
+            })
+        end
         return {
             holder = holder, box = box, boxStroke = boxStroke, nameLabel = nameLabel,
             distLabel = distLabel, extraLabel = extraLabel,
             healthBg = healthBg, healthFill = healthFill,
+            bones = bones, cham = nil,
         }
+    end
+
+    local function hideBones(d)
+        local bones = d.bones
+        if not bones then return end
+        for i = 1, #bones do
+            bones[i].Visible = false
+        end
+    end
+
+    local function dropCham(d)
+        local hl = d.cham
+        if hl then
+            d.cham = nil
+            chamCount = math.max(0, chamCount - 1)
+            pcall(function() hl:Destroy() end)
+        end
     end
 
     local function hideDrawing(d)
@@ -6190,6 +6276,10 @@ do
         d.distLabel.Visible = false
         d.extraLabel.Visible = false
         d.healthBg.Visible = false
+        hideBones(d)
+        if d.cham then
+            d.cham.Enabled = false
+        end
     end
 
     -- Pooled. Walking in and out of range used to Destroy and rebuild eight
@@ -6212,12 +6302,18 @@ do
         d.nameLabel.TextColor3 = color
         d.distLabel.TextColor3 = color
         d.extraLabel.TextColor3 = color
+        if d.bones then
+            for i = 1, #d.bones do
+                d.bones[i].BackgroundColor3 = color
+            end
+        end
         hideDrawing(d)
         return d
     end
 
     local function removeDrawing(d)
         if not d then return end
+        dropCham(d)
         if #pool >= POOL_CAP or not d.holder.Parent then
             pcall(function() d.holder:Destroy() end)
             return
@@ -6238,7 +6334,241 @@ do
         return nil, nil
     end
 
-    local function renderDrawing(d, worldPos, heightStuds, distance, displayName, kind, humanoid)
+    local function paintHealthBar(d, hp01: number, x: number, y: number, h: number)
+        local hp = math.clamp(hp01, 0, 1)
+        d.healthBg.Size = UDim2.fromOffset(3, h)
+        d.healthBg.Position = UDim2.fromOffset(x, y)
+        d.healthBg.Visible = true
+        d.healthFill.Size = UDim2.new(1, 0, hp, 0)
+        d.healthFill.Position = UDim2.new(0, 0, 1 - hp, 0)
+        d.healthFill.BackgroundColor3 = Color3.fromRGB(
+            math.floor(255 * (1 - hp)), math.floor(255 * hp), 60)
+    end
+
+    local function placeBone(frame: Frame, ax: number, ay: number, bx: number, by: number)
+        local dx, dy = bx - ax, by - ay
+        local len = math.sqrt(dx * dx + dy * dy)
+        if len < 2 then
+            frame.Visible = false
+            return
+        end
+        frame.Size = UDim2.fromOffset(len, 1)
+        frame.Position = UDim2.fromOffset((ax + bx) * 0.5, (ay + by) * 0.5)
+        frame.Rotation = math.deg(math.atan2(dy, dx))
+        frame.Visible = true
+    end
+
+    local function drawSkeleton(d, char: Model, cam: Camera)
+        local bones = d.bones
+        if not bones then return end
+        local links = if char:FindFirstChild("UpperTorso") then R15_BONES else R6_BONES
+        local used = 0
+        for i = 1, #links do
+            if used >= #bones then break end
+            local a = char:FindFirstChild(links[i][1])
+            local b = char:FindFirstChild(links[i][2])
+            if a and a:IsA("BasePart") and b and b:IsA("BasePart") then
+                local pa, oa = cam:WorldToViewportPoint(a.Position)
+                local pb, ob = cam:WorldToViewportPoint(b.Position)
+                if pa.Z > 0 and pb.Z > 0 and (oa or ob) then
+                    used += 1
+                    placeBone(bones[used], pa.X, pa.Y, pb.X, pb.Y)
+                end
+            end
+        end
+        for i = used + 1, #bones do
+            bones[i].Visible = false
+        end
+    end
+
+    local function setCham(d, char: Model?, allow: boolean)
+        if not allow or not char or not State.PlayerChams then
+            if d.cham then
+                d.cham.Enabled = false
+            end
+            return
+        end
+        local hl = d.cham
+        if not hl or not hl.Parent then
+            if chamCount >= CHAM_CAP then
+                return
+            end
+            hl = Instance.new("Highlight")
+            hl.Name = "TroyHubCham"
+            hl.FillColor = PLAYER_COLOR
+            hl.OutlineColor = Color3.fromRGB(255, 220, 220)
+            hl.FillTransparency = 0.55
+            hl.OutlineTransparency = 0.15
+            hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            hl.Parent = espFolder
+            d.cham = hl
+            chamCount += 1
+        end
+        hl.Adornee = char
+        hl.Enabled = true
+    end
+
+    local STAT_ALIASES = {
+        gold = { "Gold", "Money", "Cash", "Coins", "Currency" },
+        job = { "Job", "Class", "Occupation", "Profession", "Role", "Career" },
+        age = { "Age", "Years" },
+        deaths = { "Deaths", "Death", "Downs" },
+    }
+    local statCache: { [Player]: any } = {}
+
+    local function valueFrom(inst: Instance, name: string): any?
+        local okAttr, attr = pcall(function()
+            return inst:GetAttribute(name)
+        end)
+        if okAttr and attr ~= nil then
+            return attr
+        end
+        local child = inst:FindFirstChild(name)
+        if child and child:IsA("ValueBase") then
+            return (child :: any).Value
+        end
+        return nil
+    end
+
+    local function scanStat(plr: Player, aliases: { string }): any?
+        local char = plr.Character
+        local roots: { Instance } = { plr }
+        local ls = plr:FindFirstChild("leaderstats")
+        if ls then table.insert(roots, ls) end
+        for _, name in { "Stats", "Data", "Info", "Values", "PlayerData" } do
+            local folder = plr:FindFirstChild(name)
+            if folder then table.insert(roots, folder) end
+        end
+        if char then table.insert(roots, char) end
+        for _, root in roots do
+            for _, alias in aliases do
+                local v = valueFrom(root, alias)
+                if v ~= nil and v ~= "" then
+                    return v
+                end
+            end
+            for _, child in root:GetChildren() do
+                if child:IsA("Folder") or child:IsA("Configuration") then
+                    for _, alias in aliases do
+                        local v = valueFrom(child, alias)
+                        if v ~= nil and v ~= "" then
+                            return v
+                        end
+                    end
+                end
+            end
+        end
+        return nil
+    end
+
+    local function playerStats(plr: Player): any
+        local now = os.clock()
+        local cached = statCache[plr]
+        if cached and now - cached.at < 0.45 then
+            return cached
+        end
+        local pack = {
+            at = now,
+            gold = scanStat(plr, STAT_ALIASES.gold),
+            job = scanStat(plr, STAT_ALIASES.job),
+            age = scanStat(plr, STAT_ALIASES.age),
+            deaths = scanStat(plr, STAT_ALIASES.deaths),
+        }
+        statCache[plr] = pack
+        return pack
+    end
+
+    local function fmtStat(v: any): string
+        if type(v) == "number" then
+            if v >= 10000 then
+                return string.format("%.1fk", v / 1000)
+            end
+            if v == math.floor(v) then
+                return tostring(math.floor(v))
+            end
+            return string.format("%.1f", v)
+        end
+        return tostring(v)
+    end
+
+    local HP_KEYS = { "Health", "HP", "Hits", "Durability", "Lives", "Remaining" }
+    local MAX_KEYS = { "MaxHealth", "MaxHP", "MaxHits", "MaxDurability", "Max" }
+    local resourceHP: { [Instance]: { hp: number, max: number, vol: number } } = {}
+
+    local function parseHpPair(v: any): (number?, number?)
+        if type(v) == "number" then
+            return v, nil
+        end
+        if type(v) == "string" then
+            local a, b = string.match(v, "(%d+)%s*/%s*(%d+)")
+            if a and b then
+                return tonumber(a), tonumber(b)
+            end
+            return tonumber(v), nil
+        end
+        return nil, nil
+    end
+
+    local function volumeOf(obj: Instance): number
+        if obj:IsA("BasePart") then
+            local s = obj.Size
+            return s.X * s.Y * s.Z
+        end
+        if obj:IsA("Model") then
+            local ok, _cf, size = pcall(function()
+                return obj:GetBoundingBox()
+            end)
+            if ok and typeof(size) == "Vector3" then
+                return size.X * size.Y * size.Z
+            end
+        end
+        return 0
+    end
+
+    local function resourceHealth(obj: Instance): (number?, number?)
+        local rec = resourceHP[obj]
+        local hp, maxHp
+        for _, key in HP_KEYS do
+            local a, b = parseHpPair(valueFrom(obj, key))
+            if a then
+                hp = a
+                maxHp = b
+                break
+            end
+        end
+        if not maxHp then
+            for _, key in MAX_KEYS do
+                local a = parseHpPair(valueFrom(obj, key))
+                if a then
+                    maxHp = a
+                    break
+                end
+            end
+        end
+        local vol = volumeOf(obj)
+        if not rec then
+            rec = { hp = hp or 1, max = maxHp or hp or 1, vol = math.max(vol, 0.01) }
+            resourceHP[obj] = rec
+        end
+        if vol > rec.vol then
+            rec.vol = vol
+        end
+        if hp then
+            rec.hp = hp
+            if maxHp then
+                rec.max = math.max(maxHp, hp)
+            elseif hp > rec.max then
+                rec.max = hp
+            end
+            return rec.hp, rec.max
+        end
+        if vol > 0 and rec.vol > 0 then
+            return vol, rec.vol
+        end
+        return nil, nil
+    end
+
+    local function renderDrawing(d, worldPos, heightStuds, distance, displayName, kind, info)
         local cam = workspace.CurrentCamera
         if not cam then hideDrawing(d); return end
         local center = cam:WorldToViewportPoint(worldPos)
@@ -6250,6 +6580,7 @@ do
         local widthPx = math.max(heightPx * 0.55, 8)
         local boxY = math.min(topPt.Y, bottomPt.Y)
         local isPlayer = kind == "player"
+        info = info or {}
 
         if (isPlayer and State.PlayerBox) or (not isPlayer and State.ResourceBox) then
             d.box.Size = UDim2.fromOffset(widthPx, heightPx)
@@ -6261,7 +6592,7 @@ do
 
         if (isPlayer and State.PlayerName) or (not isPlayer and State.ResourceName) then
             d.nameLabel.Text = displayName
-            d.nameLabel.Position = UDim2.fromOffset(center.X - 80, boxY - 16)
+            d.nameLabel.Position = UDim2.fromOffset(center.X - 90, boxY - 16)
             d.nameLabel.Visible = true
         else
             d.nameLabel.Visible = false
@@ -6275,28 +6606,72 @@ do
             d.distLabel.Visible = false
         end
 
-        if isPlayer and humanoid then
-            if State.PlayerHealth then
-                local hp = math.clamp(humanoid.Health / math.max(humanoid.MaxHealth, 1), 0, 1)
-                d.healthBg.Size = UDim2.fromOffset(3, heightPx)
-                d.healthBg.Position = UDim2.fromOffset(center.X + widthPx / 2 + 3, boxY)
-                d.healthBg.Visible = true
-                d.healthFill.Size = UDim2.new(1, 0, hp, 0)
-                d.healthFill.Position = UDim2.new(0, 0, 1 - hp, 0)
-                d.healthFill.BackgroundColor3 = Color3.fromRGB(
-                    math.floor(255 * (1 - hp)), math.floor(255 * hp), 60)
+        local lines = {}
+        local hp01 = nil :: number?
+        if isPlayer then
+            local humanoid = info.humanoid
+            if humanoid and humanoid:IsA("Humanoid") then
+                local cur = humanoid.Health
+                local maxh = math.max(humanoid.MaxHealth, 1)
+                hp01 = math.clamp(cur / maxh, 0, 1)
+                if State.PlayerHealthText then
+                    table.insert(lines, string.format("Health %d/%d", math.floor(cur), math.floor(maxh)))
+                end
+            end
+            if State.PlayerHealth and hp01 then
+                paintHealthBar(d, hp01, center.X + widthPx / 2 + 3, boxY, heightPx)
             else
                 d.healthBg.Visible = false
             end
-            if State.PlayerHealthText then
-                d.extraLabel.Text = string.format("%d / %d HP", math.floor(humanoid.Health), math.floor(humanoid.MaxHealth))
-                d.extraLabel.Position = UDim2.fromOffset(center.X - 100, boxY + heightPx + 16)
-                d.extraLabel.Visible = true
-            else
-                d.extraLabel.Visible = false
+            local plr = info.player
+            if plr and typeof(plr) == "Instance" then
+                local stats = playerStats(plr)
+                if State.PlayerDeaths and stats.deaths ~= nil then
+                    table.insert(lines, "Deaths " .. fmtStat(stats.deaths))
+                end
+                if State.PlayerGold and stats.gold ~= nil then
+                    table.insert(lines, "Gold " .. fmtStat(stats.gold))
+                end
+                if State.PlayerJob and stats.job ~= nil then
+                    table.insert(lines, "Job " .. fmtStat(stats.job))
+                end
+                if State.PlayerAge and stats.age ~= nil then
+                    table.insert(lines, "Age " .. fmtStat(stats.age))
+                end
             end
+            if State.PlayerSkeleton and info.character and info.character:IsA("Model") then
+                drawSkeleton(d, info.character, cam)
+            else
+                hideBones(d)
+            end
+            setCham(d, if info.character and info.character:IsA("Model") then info.character else nil, info.cham == true)
         else
-            d.healthBg.Visible = false
+            hideBones(d)
+            setCham(d, nil, false)
+            local res = info.resource
+            local hp, maxh
+            if res and res:IsA("Instance") then
+                hp, maxh = resourceHealth(res)
+            end
+            if hp and maxh and maxh > 0 then
+                hp01 = math.clamp(hp / maxh, 0, 1)
+            end
+            if State.ResourceHealth and hp01 then
+                paintHealthBar(d, hp01, center.X - widthPx / 2 - 6, boxY, heightPx)
+            else
+                d.healthBg.Visible = false
+            end
+            if State.ResourceHealthText and hp and maxh then
+                table.insert(lines, string.format("HP %s/%s", fmtStat(hp), fmtStat(maxh)))
+            end
+        end
+
+        if #lines > 0 then
+            d.extraLabel.Text = table.concat(lines, "\n")
+            d.extraLabel.Size = UDim2.fromOffset(160, #lines * 13)
+            d.extraLabel.Position = UDim2.fromOffset(center.X + widthPx / 2 + 10, boxY)
+            d.extraLabel.Visible = true
+        else
             d.extraLabel.Visible = false
         end
     end
@@ -6312,6 +6687,7 @@ do
                     drawings[inst] = nil
                 end
                 table.clear(graceUntil)
+                table.clear(statCache)
             end
             return
         end
@@ -6320,6 +6696,7 @@ do
         local activeSet = {}
 
         if State.PlayerESP then
+            local players = {}
             for _, plr in Players:GetPlayers() do
                 local char = plr.Character
                 if plr ~= player and char then
@@ -6330,16 +6707,30 @@ do
                         if not pos or not height then pos, height = hrp.Position, 5 end
                         local dist = (pos - myPos).Magnitude
                         if dist <= clampNum(State.PlayerMaxDist, 50, 2000, 700) then
-                            activeSet[plr] = true
-                            local d = drawings[plr]
-                            if not d then
-                                d = makeDrawing(PLAYER_COLOR)
-                                drawings[plr] = d
-                            end
-                            renderDrawing(d, pos, height, dist, plr.Name, "player", hum)
+                            table.insert(players, {
+                                plr = plr, char = char, hum = hum,
+                                pos = pos, height = height, dist = dist,
+                            })
                         end
                     end
                 end
+            end
+            table.sort(players, function(a, b)
+                return a.dist < b.dist
+            end)
+            for i, row in players do
+                activeSet[row.plr] = true
+                local d = drawings[row.plr]
+                if not d then
+                    d = makeDrawing(PLAYER_COLOR)
+                    drawings[row.plr] = d
+                end
+                renderDrawing(d, row.pos, row.height, row.dist, row.plr.Name, "player", {
+                    humanoid = row.hum,
+                    character = row.char,
+                    player = row.plr,
+                    cham = i <= CHAM_CAP,
+                })
             end
         end
 
@@ -6396,7 +6787,9 @@ do
                     d = makeDrawing(RESOURCE_COLOR)
                     drawings[c.inst] = d
                 end
-                renderDrawing(d, c.pos, c.height, c.dist, c.kind, "resource")
+                renderDrawing(d, c.pos, c.height, c.dist, c.kind, "resource", {
+                    resource = c.inst,
+                })
             end
         end
 
@@ -6415,6 +6808,11 @@ do
                     hideDrawing(d)
                 elseif now >= expiry then
                     graceUntil[inst] = nil
+                    if typeof(inst) == "Instance" and inst:IsA("Player") then
+                        statCache[inst] = nil
+                    elseif typeof(inst) == "Instance" then
+                        resourceHP[inst] = nil
+                    end
                     removeDrawing(d)
                     drawings[inst] = nil
                 end
@@ -8092,7 +8490,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.7 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.8 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature

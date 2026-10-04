@@ -3,11 +3,12 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.7",
+		script = "2.0.8",
 		configSchema = 2,
 		builtAt = "2026-10-04",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.8  Player ESP skeleton, chams, deaths/gold/job/age. Resource health bar.",
 			"2.0.7  Overpower: same-tick gather burst, learned payload, client power spoof.",
 			"2.0.6  Teleport Gather pins in place, farm picks from the player not the camera, gather burst per swing.",
 			"2.0.5  Hub layout (core/features/ui/config). Simple registry and lifecycle. JSON settings only.",
