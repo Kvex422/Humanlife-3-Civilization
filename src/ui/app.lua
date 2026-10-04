@@ -1590,7 +1590,7 @@ Pages["Auto Gather"] = function()
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Picks for rock/ore, axes for trees. Uses Flint / Bronze / Iron names from the shop. Owned tools first; spoof still sends the best catalog name the server already has.",
+        Text = "Spoof Best Tool sends a shop catalog pick or axe you do not own (Flint, Bronze, Iron…). Trees get an axe, rocks get a pick. One unique payload set per swing.",
         TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cO,
@@ -1603,7 +1603,7 @@ Pages["Auto Gather"] = function()
             applyGatherPower()
         end
     end)
-    toggleRow(cO, "Spoof Best Tool  (Flint/Bronze pick or axe by node type)", 82, State.SpoofPickaxe, function(v)
+    toggleRow(cO, "Spoof Best Tool  (catalog Flint/Bronze/Iron, no purchase)", 82, State.SpoofPickaxe, function(v)
         State.SpoofPickaxe = v
     end)
     sliderRow(cO, "Hits per swing", 120, 1, 8, State.HitsPerSwing, "", function(v)
@@ -4654,7 +4654,6 @@ local STAND_HIP = 3
 local function hitGap(): number
     return clampNum(State.HitGap, 0.05, 3, 0.12)
 end
-local SWINGS = 2
 local DWELL_MAX = 22
 local EMPTY_NEEDED = 5
 -- Neighbours hit per pass alongside the target. Unbounded fan-out was firing
@@ -4835,18 +4834,6 @@ local function installGatherHook(remote: Instance)
         if self == remote and (method == "FireServer" or method == "InvokeServer") then
             if not GatherTap.ourFire then
                 rememberGatherArgs(...)
-                if State.Overpower then
-                    local hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
-                    if hits > 1 then
-                        local first = prev(self, ...)
-                        GatherTap.ourFire = true
-                        for _ = 2, hits do
-                            pcall(prev, self, ...)
-                        end
-                        GatherTap.ourFire = false
-                        return first
-                    end
-                end
             end
         end
         return prev(self, ...)
@@ -4858,7 +4845,7 @@ local function installGatherHook(remote: Instance)
     if ok and type(old) == "function" then
         GatherTap.origNamecall = old
         GatherTap.hooked = true
-        log("Gather remote hooked — extra hits ride the game swing")
+        log("Gather remote hooked — learning payload")
     end
 end
 
@@ -4975,176 +4962,106 @@ local function firePacked(remote: Instance, packed: any): boolean
     return true
 end
 
-local function scalePacked(packed: any): any
-    local scale = clampNum(State.PowerScale, 1, 10, 2)
-    local out = table.pack(table.unpack(packed, 1, packed.n))
-    local hadNumber = false
-    for i = 1, out.n do
-        if type(out[i]) == "number" then
-            out[i] = out[i] * scale
-            hadNumber = true
-        end
-    end
-    return out
-end
-
--- Shop tools in this game are "Flint Pick", "Flint Axe", "Bronze Pick", …
--- not a generic Tool named Pickaxe. Picks for rock/ore, axes for trees.
-local TOOL_TIERS = {
-    wood = 1, stone = 2, flint = 3, copper = 4, tin = 4, bronze = 5,
-    iron = 6, steel = 7, gold = 8, sulfur = 4,
+-- Shop catalog. Spoof these names even when the player owns nothing.
+local SHOP_TOOLS = {
+    { name = "Steel Pick", kind = "pick", tier = 7 },
+    { name = "Iron Pick", kind = "pick", tier = 6 },
+    { name = "Bronze Pick", kind = "pick", tier = 5 },
+    { name = "Copper Pick", kind = "pick", tier = 4 },
+    { name = "Flint Pick", kind = "pick", tier = 3 },
+    { name = "Stone Pick", kind = "pick", tier = 2 },
+    { name = "Steel Axe", kind = "axe", tier = 7 },
+    { name = "Iron Axe", kind = "axe", tier = 6 },
+    { name = "Bronze Axe", kind = "axe", tier = 5 },
+    { name = "Copper Axe", kind = "axe", tier = 4 },
+    { name = "Flint Axe", kind = "axe", tier = 3 },
+    { name = "Stone Axe", kind = "axe", tier = 2 },
 }
 local TREE_KINDS = {
     Tree = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
 }
-local toolIndex = {
-    at = 0,
-    rows = {} :: { { inst: Instance?, name: string, kind: string, tier: number, owned: boolean } },
-    logged = false,
-}
+local shopBind = { at = 0, byName = {} :: { [string]: Instance }, logged = false }
 
-local function classifyTool(name: string): (string?, number)
-    local n = string.lower(name)
-    n = string.gsub(n, "[^%a]", "")
-    if n == "" then return nil, 0 end
-    local isPick = string.find(n, "pick", 1, true) ~= nil
-    local isAxe = string.find(n, "axe", 1, true) ~= nil
-    if isPick then
-        isAxe = false
-    end
-    if not isPick and not isAxe then
-        return nil, 0
-    end
-    local tier = 2
-    for mat, t in TOOL_TIERS do
-        if string.find(n, mat, 1, true) then
-            if t > tier then tier = t end
-        end
-    end
-    return if isPick then "pick" else "axe", tier
-end
-
-local function considerTool(name: string, inst: Instance?, owned: boolean)
-    local kind, tier = classifyTool(name)
-    if not kind then return end
-    table.insert(toolIndex.rows, {
-        inst = inst,
-        name = name,
-        kind = kind,
-        tier = tier,
-        owned = owned,
-    })
-end
-
-local function indexTools()
+local function bindShopTools()
     local now = os.clock()
-    if now - toolIndex.at < 4 and #toolIndex.rows > 0 then
+    if now - shopBind.at < 6 and next(shopBind.byName) ~= nil then
         return
     end
-    toolIndex.at = now
-    table.clear(toolIndex.rows)
-    local function walk(root: Instance?, owned: boolean)
+    shopBind.at = now
+    table.clear(shopBind.byName)
+    local function remember(inst: Instance)
+        for _, row in SHOP_TOOLS do
+            if inst.Name == row.name and shopBind.byName[row.name] == nil then
+                shopBind.byName[row.name] = inst
+            end
+        end
+    end
+    local function walk(root: Instance?)
         if not root then return end
-        considerTool(root.Name, root, owned)
+        remember(root)
         for _, d in root:GetDescendants() do
-            if d:IsA("Tool") or d:IsA("Model") then
-                considerTool(d.Name, d, owned)
-            elseif d:IsA("StringValue") or d:IsA("IntValue") or d:IsA("NumberValue") then
-                local ownedHere = owned
-                if d:IsA("IntValue") or d:IsA("NumberValue") then
-                    ownedHere = owned or ((d :: any).Value > 0)
-                end
-                considerTool(d.Name, d, ownedHere)
-            end
+            remember(d)
         end
     end
-    walk(player:FindFirstChild("Backpack"), true)
-    walk(player.Character, true)
-    for _, folderName in { "Inventory", "Items", "Tools", "Hotbar", "Equipment", "Data" } do
-        walk(player:FindFirstChild(folderName), true)
-    end
-    local rsTools = ReplicatedStorage:FindFirstChild("Tools")
-        or ReplicatedStorage:FindFirstChild("Items")
-        or ReplicatedStorage:FindFirstChild("Shop")
-    if rsTools then
-        walk(rsTools, false)
-    else
-        for _, child in ReplicatedStorage:GetChildren() do
-            if child:IsA("Folder") or child:IsA("Model") then
-                local n = string.lower(child.Name)
-                if string.find(n, "tool", 1, true) or string.find(n, "item", 1, true) or string.find(n, "shop", 1, true) then
-                    walk(child, false)
-                end
-            elseif child:IsA("Tool") then
-                considerTool(child.Name, child, false)
-            end
-        end
-    end
+    walk(ReplicatedStorage)
     pcall(function()
-        walk(game:GetService("StarterPack"), false)
+        walk(game:GetService("Lighting"))
     end)
-    if not toolIndex.logged and #toolIndex.rows > 0 then
-        toolIndex.logged = true
+    pcall(function()
+        walk(game:GetService("StarterPack"))
+    end)
+    if not shopBind.logged then
+        shopBind.logged = true
         local names = {}
-        for i = 1, math.min(#toolIndex.rows, 8) do
-            table.insert(names, toolIndex.rows[i].name)
+        for name in shopBind.byName do
+            table.insert(names, name)
         end
-        log("Tools indexed: " .. table.concat(names, ", "))
+        if #names > 0 then
+            log("Shop tools bound: " .. table.concat(names, ", "))
+        else
+            log("Shop tools: no catalog instances — spoofing Flint/Bronze names")
+        end
     end
 end
 
-local function bestTool(wantKind: string): (Instance?, string?)
-    indexTools()
-    local best: any = nil
-    local bestScore = -1
-    for _, row in toolIndex.rows do
-        if not row.inst or row.inst.Parent then
-            local score = row.tier
-            if row.kind == wantKind then
-                score += 20
-            end
-            if row.owned then
-                score += 8
-            end
-            if State.SpoofPickaxe and not row.owned and row.kind == wantKind then
-                score += 12
-            end
-            if score > bestScore then
-                bestScore = score
-                best = row
+local function resolveTool(kind: string): (Instance?, string)
+    bindShopTools()
+    local fallback = if kind == "axe" then "Flint Axe" else "Flint Pick"
+    local bestName = fallback
+    local bestTier = 0
+    local bestInst: Instance? = nil
+    for _, row in SHOP_TOOLS do
+        if row.kind == kind then
+            local inst = shopBind.byName[row.name]
+            local usable = inst ~= nil or row.tier <= 5
+            if usable and row.tier > bestTier then
+                bestTier = row.tier
+                bestName = row.name
+                bestInst = inst
             end
         end
     end
-    if not best then
-        return nil, if wantKind == "axe" then "Flint Axe" else "Flint Pick"
-    end
-    return best.inst, best.name
+    return bestInst, bestName
 end
 
-local function packForTarget(model: Instance, part: BasePart?, wantKind: string?): any
-    local learned = GatherTap.learned
-    if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
-        local out = table.pack(table.unpack(learned, 1, learned.n))
-        for i = 1, out.n do
-            local v = out[i]
-            if typeof(v) == "Instance" and ResourcesFolder and (v :: Instance):IsDescendantOf(ResourcesFolder) then
-                out[i] = model
-            end
+local function payloadKey(packed: any): string
+    local bits = {}
+    for i = 1, packed.n do
+        local v = packed[i]
+        if typeof(v) == "Instance" then
+            table.insert(bits, "I:" .. (v :: Instance):GetFullName())
+        else
+            table.insert(bits, typeof(v) .. ":" .. tostring(v))
         end
-        return scalePacked(out)
     end
-    if State.SpoofPickaxe then
-        local tool, toolName = bestTool(wantKind or "pick")
-        if tool then
-            return table.pack(model, tool, toolName)
-        end
-        return table.pack(model, toolName or "Flint Pick")
-    end
-    return table.pack(model)
+    return table.concat(bits, "|")
 end
 
-local function fireGatherOnce(remote: Instance, target: Instance): boolean
-    return firePacked(remote, table.pack(target))
+local function addPayload(list: { any }, seen: { [string]: boolean }, packed: any)
+    local key = payloadKey(packed)
+    if seen[key] then return end
+    seen[key] = true
+    table.insert(list, packed)
 end
 
 local function fireGather(inst: Instance): boolean
@@ -5166,31 +5083,45 @@ local function fireGather(inst: Instance): boolean
     local part = liveHarvestPart(inst)
     local kind = ResourceScanner.typeOf(inst)
     local wantKind = if kind and TREE_KINDS[kind] then "axe" else "pick"
-    local packed = packForTarget(model, part, wantKind)
-    local _toolInst, toolName = bestTool(wantKind)
+    local payloads = {}
+    local seen = {}
+    addPayload(payloads, seen, table.pack(model))
+    if part and part ~= model then
+        addPayload(payloads, seen, table.pack(part))
+    end
+    if State.SpoofPickaxe then
+        local toolInst, toolName = resolveTool(wantKind)
+        addPayload(payloads, seen, table.pack(model, toolName))
+        if toolInst then
+            addPayload(payloads, seen, table.pack(model, toolInst))
+        end
+    end
+    local learned = GatherTap.learned
+    if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
+        local copy = table.pack(table.unpack(learned, 1, learned.n))
+        local scale = clampNum(State.PowerScale, 1, 10, 2)
+        for i = 1, copy.n do
+            local v = copy[i]
+            if typeof(v) == "Instance" and ResourcesFolder and (v :: Instance):IsDescendantOf(ResourcesFolder) then
+                copy[i] = model
+            elseif type(v) == "number" then
+                copy[i] = v * scale
+            end
+        end
+        addPayload(payloads, seen, copy)
+    end
     local hits = 1
     if State.Overpower then
         hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
     end
     GatherTap.ourFire = true
-    -- Proven shape first. Extra pickaxe / burst args cannot block this hit.
-    local hit = firePacked(remote, table.pack(model))
-    if packed.n ~= 1 or packed[1] ~= model then
-        firePacked(remote, packed)
-    end
-    if State.SpoofPickaxe and toolName then
-        firePacked(remote, table.pack(model, toolName))
-    end
-    if hit and hits > 1 then
-        for i = 2, hits do
-            if part and part ~= model and i % 2 == 0 then
-                firePacked(remote, table.pack(part))
-            else
-                firePacked(remote, table.pack(model))
+    local hit = false
+    for _ = 1, hits do
+        for _, packed in payloads do
+            if firePacked(remote, packed) then
+                hit = true
             end
         end
-    elseif hit and part and part ~= model and not State.Overpower then
-        firePacked(remote, table.pack(part))
     end
     GatherTap.ourFire = false
     if hit then
@@ -5199,21 +5130,12 @@ local function fireGather(inst: Instance): boolean
     return hit
 end
 
-local function clusterInRange(radius: number)
-    return listedNearby(radius, MAX_FAN + 4)
-end
-
 local function mineCluster(radius: number, keepGoing: () -> boolean): number
     local fired = 0
-    local around = clusterInRange(radius)
-    for _, r in around do
+    for _, r in listedNearby(radius, MAX_FAN + 4) do
         if not keepGoing() then break end
-        if r.inst.Parent then
-            local swings = if State.Overpower then 1 else SWINGS
-            for _ = 1, swings do
-                if not keepGoing() or not r.inst.Parent then break end
-                if fireGather(r.inst) then fired += 1 end
-            end
+        if r.inst.Parent and fireGather(r.inst) then
+            fired += 1
         end
     end
     return fired
@@ -5402,11 +5324,7 @@ local function drainUntilGone(radius: number, inst: Instance?, pos: Vector3?, ke
         if aim then pinAt(inst, aim) end
         local targetLive = inst ~= nil and inst.Parent ~= nil
         if targetLive and inst then
-            local swings = if State.Overpower then 1 else SWINGS
-            for _ = 1, swings do
-                if not keepGoing() or not inst.Parent then break end
-                if fireGather(inst) then fired += 1 end
-            end
+            if fireGather(inst) then fired += 1 end
         end
         -- One scan per pass. This used to walk the whole resource index twice
         -- every 0.12s, which is what made dense areas chug.
@@ -5718,7 +5636,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.10 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.11 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature

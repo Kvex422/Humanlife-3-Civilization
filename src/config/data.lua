@@ -3,11 +3,12 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.10",
+		script = "2.0.11",
 		configSchema = 2,
 		builtAt = "2026-10-04",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.11  Catalog tool spoof without owning one. Single gather fire path, no duplicate payloads.",
 			"2.0.10  Shop tools: Flint/Bronze pick vs axe by node type.",
 			"2.0.9  Teleport Gather unanchors to harvest, resource HP reads native bars, pickaxe spoof.",
 			"2.0.8  Player ESP skeleton, chams, deaths/gold/job/age. Resource health bar.",
