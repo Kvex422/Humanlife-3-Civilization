@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.9 bundled from src/. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.10 bundled from src/. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -297,11 +297,12 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.9",
+		script = "2.0.10",
 		configSchema = 2,
 		builtAt = "2026-10-04",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.10  Shop tools: Flint/Bronze pick vs axe by node type.",
 			"2.0.9  Teleport Gather unanchors to harvest, resource HP reads native bars, pickaxe spoof.",
 			"2.0.8  Player ESP skeleton, chams, deaths/gold/job/age. Resource health bar.",
 			"2.0.7  Overpower: same-tick gather burst, learned payload, client power spoof.",
@@ -4619,7 +4620,7 @@ Pages["Auto Gather"] = function()
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Same-tick extra hits after Hit Delay. Spoof Pickaxe sends the ReplicatedStorage pickaxe the server already knows — it cannot invent an inventory item the server rejects.",
+        Text = "Picks for rock/ore, axes for trees. Uses Flint / Bronze / Iron names from the shop. Owned tools first; spoof still sends the best catalog name the server already has.",
         TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cO,
@@ -4632,7 +4633,7 @@ Pages["Auto Gather"] = function()
             applyGatherPower()
         end
     end)
-    toggleRow(cO, "Spoof Pickaxe  (send pickaxe on gather, no inventory item)", 82, State.SpoofPickaxe, function(v)
+    toggleRow(cO, "Spoof Best Tool  (Flint/Bronze pick or axe by node type)", 82, State.SpoofPickaxe, function(v)
         State.SpoofPickaxe = v
     end)
     sliderRow(cO, "Hits per swing", 120, 1, 8, State.HitsPerSwing, "", function(v)
@@ -8014,61 +8015,143 @@ local function scalePacked(packed: any): any
             hadNumber = true
         end
     end
-    if State.Overpower and not hadNumber and scale > 1 then
-        out.n += 1
-        out[out.n] = scale
-    end
     return out
 end
 
-local pickaxeCache = { inst = nil :: Instance?, scanned = false, logged = false }
+-- Shop tools in this game are "Flint Pick", "Flint Axe", "Bronze Pick", …
+-- not a generic Tool named Pickaxe. Picks for rock/ore, axes for trees.
+local TOOL_TIERS = {
+    wood = 1, stone = 2, flint = 3, copper = 4, tin = 4, bronze = 5,
+    iron = 6, steel = 7, gold = 8, sulfur = 4,
+}
+local TREE_KINDS = {
+    Tree = true, ["Cherry Tree"] = true, ["Rubber Tree"] = true,
+}
+local toolIndex = {
+    at = 0,
+    rows = {} :: { { inst: Instance?, name: string, kind: string, tier: number, owned: boolean } },
+    logged = false,
+}
 
-local function nameLooksPick(name: string): boolean
+local function classifyTool(name: string): (string?, number)
     local n = string.lower(name)
-    return string.find(n, "pickaxe", 1, true) ~= nil
-        or string.find(n, "pick axe", 1, true) ~= nil
-        or n == "pick"
-end
-
-local function scanForPickaxe(root: Instance): Instance?
-    for _, d in root:GetDescendants() do
-        if (d:IsA("Tool") or d:IsA("Folder") or d:IsA("Model")) and nameLooksPick(d.Name) then
-            return d
+    n = string.gsub(n, "[^%a]", "")
+    if n == "" then return nil, 0 end
+    local isPick = string.find(n, "pick", 1, true) ~= nil
+    local isAxe = string.find(n, "axe", 1, true) ~= nil
+    if isPick then
+        isAxe = false
+    end
+    if not isPick and not isAxe then
+        return nil, 0
+    end
+    local tier = 2
+    for mat, t in TOOL_TIERS do
+        if string.find(n, mat, 1, true) then
+            if t > tier then tier = t end
         end
     end
-    return nil
+    return if isPick then "pick" else "axe", tier
 end
 
-local function pickaxeTemplate(): Instance?
-    if pickaxeCache.scanned and pickaxeCache.inst and pickaxeCache.inst.Parent then
-        return pickaxeCache.inst
+local function considerTool(name: string, inst: Instance?, owned: boolean)
+    local kind, tier = classifyTool(name)
+    if not kind then return end
+    table.insert(toolIndex.rows, {
+        inst = inst,
+        name = name,
+        kind = kind,
+        tier = tier,
+        owned = owned,
+    })
+end
+
+local function indexTools()
+    local now = os.clock()
+    if now - toolIndex.at < 4 and #toolIndex.rows > 0 then
+        return
     end
-    pickaxeCache.scanned = true
-    local roots: { Instance } = { ReplicatedStorage }
-    pcall(function()
-        table.insert(roots, game:GetService("StarterPack"))
-    end)
-    pcall(function()
-        table.insert(roots, game:GetService("Lighting"))
-    end)
-    local bag = player:FindFirstChild("Backpack")
-    if bag then table.insert(roots, bag) end
-    if player.Character then table.insert(roots, player.Character) end
-    for _, root in roots do
-        local hit = scanForPickaxe(root)
-        if hit then
-            pickaxeCache.inst = hit
-            if not pickaxeCache.logged then
-                pickaxeCache.logged = true
-                log("Pickaxe template: " .. hit:GetFullName())
+    toolIndex.at = now
+    table.clear(toolIndex.rows)
+    local function walk(root: Instance?, owned: boolean)
+        if not root then return end
+        considerTool(root.Name, root, owned)
+        for _, d in root:GetDescendants() do
+            if d:IsA("Tool") or d:IsA("Model") then
+                considerTool(d.Name, d, owned)
+            elseif d:IsA("StringValue") or d:IsA("IntValue") or d:IsA("NumberValue") then
+                local ownedHere = owned
+                if d:IsA("IntValue") or d:IsA("NumberValue") then
+                    ownedHere = owned or ((d :: any).Value > 0)
+                end
+                considerTool(d.Name, d, ownedHere)
             end
-            return hit
         end
     end
-    return nil
+    walk(player:FindFirstChild("Backpack"), true)
+    walk(player.Character, true)
+    for _, folderName in { "Inventory", "Items", "Tools", "Hotbar", "Equipment", "Data" } do
+        walk(player:FindFirstChild(folderName), true)
+    end
+    local rsTools = ReplicatedStorage:FindFirstChild("Tools")
+        or ReplicatedStorage:FindFirstChild("Items")
+        or ReplicatedStorage:FindFirstChild("Shop")
+    if rsTools then
+        walk(rsTools, false)
+    else
+        for _, child in ReplicatedStorage:GetChildren() do
+            if child:IsA("Folder") or child:IsA("Model") then
+                local n = string.lower(child.Name)
+                if string.find(n, "tool", 1, true) or string.find(n, "item", 1, true) or string.find(n, "shop", 1, true) then
+                    walk(child, false)
+                end
+            elseif child:IsA("Tool") then
+                considerTool(child.Name, child, false)
+            end
+        end
+    end
+    pcall(function()
+        walk(game:GetService("StarterPack"), false)
+    end)
+    if not toolIndex.logged and #toolIndex.rows > 0 then
+        toolIndex.logged = true
+        local names = {}
+        for i = 1, math.min(#toolIndex.rows, 8) do
+            table.insert(names, toolIndex.rows[i].name)
+        end
+        log("Tools indexed: " .. table.concat(names, ", "))
+    end
 end
 
-local function packForTarget(model: Instance, part: BasePart?): any
+local function bestTool(wantKind: string): (Instance?, string?)
+    indexTools()
+    local best: any = nil
+    local bestScore = -1
+    for _, row in toolIndex.rows do
+        if not row.inst or row.inst.Parent then
+            local score = row.tier
+            if row.kind == wantKind then
+                score += 20
+            end
+            if row.owned then
+                score += 8
+            end
+            if State.SpoofPickaxe and not row.owned and row.kind == wantKind then
+                score += 12
+            end
+            if score > bestScore then
+                bestScore = score
+                best = row
+            end
+        end
+    end
+    if not best then
+        return nil, if wantKind == "axe" then "Flint Axe" else "Flint Pick"
+    end
+    return best.inst, best.name
+end
+
+local function packForTarget(model: Instance, part: BasePart?, wantKind: string?): any
     local learned = GatherTap.learned
     if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
         local out = table.pack(table.unpack(learned, 1, learned.n))
@@ -8081,11 +8164,11 @@ local function packForTarget(model: Instance, part: BasePart?): any
         return scalePacked(out)
     end
     if State.SpoofPickaxe then
-        local tool = pickaxeTemplate()
+        local tool, toolName = bestTool(wantKind or "pick")
         if tool then
-            return table.pack(model, tool)
+            return table.pack(model, tool, toolName)
         end
-        return table.pack(model, "Pickaxe")
+        return table.pack(model, toolName or "Flint Pick")
     end
     return table.pack(model)
 end
@@ -8111,7 +8194,10 @@ local function fireGather(inst: Instance): boolean
     end
     local model = folderChild(inst) or inst
     local part = liveHarvestPart(inst)
-    local packed = packForTarget(model, part)
+    local kind = ResourceScanner.typeOf(inst)
+    local wantKind = if kind and TREE_KINDS[kind] then "axe" else "pick"
+    local packed = packForTarget(model, part, wantKind)
+    local _toolInst, toolName = bestTool(wantKind)
     local hits = 1
     if State.Overpower then
         hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
@@ -8121,6 +8207,9 @@ local function fireGather(inst: Instance): boolean
     local hit = firePacked(remote, table.pack(model))
     if packed.n ~= 1 or packed[1] ~= model then
         firePacked(remote, packed)
+    end
+    if State.SpoofPickaxe and toolName then
+        firePacked(remote, table.pack(model, toolName))
     end
     if hit and hits > 1 then
         for i = 2, hits do
@@ -8659,7 +8748,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.9 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.10 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
