@@ -1586,16 +1586,16 @@ Pages["Auto Gather"] = function()
     end)
 
     sectionTitle("Overpower", y); y += 34
-    local cO = card(y, 258); y += 268
+    local cO = card(y, 220); y += 230
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Spoof Best Tool sends a shop catalog pick or axe you do not own (Flint, Bronze, Iron…). Trees get an axe, rocks get a pick. One unique payload set per swing.",
+        Text = "Harvest is always a bare node hit. Overpower only tries bonus damage after that (extra ticks, class power, catalog tool names). Stone never needs a pick.",
         TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cO,
     })
-    toggleRow(cO, "Overpower  (same-tick extra hits + power spoof)", 44, State.Overpower, function(v)
+    toggleRow(cO, "Overpower  (bonus damage after the real hit)", 44, State.Overpower, function(v)
         State.Overpower = v
         if not v then
             restoreGatherPower()
@@ -1603,13 +1603,10 @@ Pages["Auto Gather"] = function()
             applyGatherPower()
         end
     end)
-    toggleRow(cO, "Spoof Best Tool  (catalog Flint/Bronze/Iron, no purchase)", 82, State.SpoofPickaxe, function(v)
-        State.SpoofPickaxe = v
-    end)
-    sliderRow(cO, "Hits per swing", 120, 1, 8, State.HitsPerSwing, "", function(v)
+    sliderRow(cO, "Hits per swing", 82, 1, 8, State.HitsPerSwing, "", function(v)
         State.HitsPerSwing = math.floor(v + 0.5)
     end)
-    sliderRow(cO, "Power Scale", 178, 1, 10, State.PowerScale, "x", function(v)
+    sliderRow(cO, "Power Scale", 140, 1, 10, State.PowerScale, "x", function(v)
         State.PowerScale = v
         if State.Overpower and farmActive() then
             applyGatherPower()
@@ -5080,47 +5077,43 @@ local function fireGather(inst: Instance): boolean
         movementLocked = false
     end
     local model = folderChild(inst) or inst
-    local part = liveHarvestPart(inst)
-    local kind = ResourceScanner.typeOf(inst)
-    local wantKind = if kind and TREE_KINDS[kind] then "axe" else "pick"
-    local payloads = {}
-    local seen = {}
-    addPayload(payloads, seen, table.pack(model))
-    if part and part ~= model then
-        addPayload(payloads, seen, table.pack(part))
-    end
-    if State.SpoofPickaxe then
-        local toolInst, toolName = resolveTool(wantKind)
-        addPayload(payloads, seen, table.pack(model, toolName))
-        if toolInst then
-            addPayload(payloads, seen, table.pack(model, toolInst))
-        end
-    end
-    local learned = GatherTap.learned
-    if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
-        local copy = table.pack(table.unpack(learned, 1, learned.n))
-        local scale = clampNum(State.PowerScale, 1, 10, 2)
-        for i = 1, copy.n do
-            local v = copy[i]
-            if typeof(v) == "Instance" and ResourcesFolder and (v :: Instance):IsDescendantOf(ResourcesFolder) then
-                copy[i] = model
-            elseif type(v) == "number" then
-                copy[i] = v * scale
-            end
-        end
-        addPayload(payloads, seen, copy)
-    end
-    local hits = 1
-    if State.Overpower then
-        hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
-    end
     GatherTap.ourFire = true
-    local hit = false
-    for _ = 1, hits do
-        for _, packed in payloads do
-            if firePacked(remote, packed) then
-                hit = true
+    -- Bare node hit is the harvest. Tools / extras never replace this.
+    local hit = firePacked(remote, table.pack(model))
+    if hit and State.Overpower then
+        local extras = {}
+        local seen = {}
+        local part = liveHarvestPart(inst)
+        if part and part ~= model then
+            addPayload(extras, seen, table.pack(part))
+        end
+        local kind = ResourceScanner.typeOf(inst)
+        local wantKind = if kind and TREE_KINDS[kind] then "axe" else "pick"
+        local toolInst, toolName = resolveTool(wantKind)
+        addPayload(extras, seen, table.pack(model, toolName))
+        if toolInst then
+            addPayload(extras, seen, table.pack(model, toolInst))
+        end
+        local learned = GatherTap.learned
+        if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
+            local copy = table.pack(table.unpack(learned, 1, learned.n))
+            local scale = clampNum(State.PowerScale, 1, 10, 2)
+            for i = 1, copy.n do
+                local v = copy[i]
+                if typeof(v) == "Instance" and ResourcesFolder and (v :: Instance):IsDescendantOf(ResourcesFolder) then
+                    copy[i] = model
+                elseif type(v) == "number" then
+                    copy[i] = v * scale
+                end
             end
+            addPayload(extras, seen, copy)
+        end
+        for _, packed in extras do
+            firePacked(remote, packed)
+        end
+        local more = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5) - 1
+        for _ = 1, more do
+            firePacked(remote, table.pack(model))
         end
     end
     GatherTap.ourFire = false
@@ -5636,7 +5629,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.11 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.12 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
