@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.8 bundled from src/. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.9 bundled from src/. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -297,11 +297,12 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.8",
+		script = "2.0.9",
 		configSchema = 2,
 		builtAt = "2026-10-04",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.9  Teleport Gather unanchors to harvest, resource HP reads native bars, pickaxe spoof.",
 			"2.0.8  Player ESP skeleton, chams, deaths/gold/job/age. Resource health bar.",
 			"2.0.7  Overpower: same-tick gather burst, learned payload, client power spoof.",
 			"2.0.6  Teleport Gather pins in place, farm picks from the player not the camera, gather burst per swing.",
@@ -535,6 +536,7 @@ return function(Hub: any)
 		HopDistance = 180,
 		HitGap = 0.12,
 		Overpower = true,
+		SpoofPickaxe = true,
 		HitsPerSwing = 3,
 		PowerScale = 2,
 		FireFloor = 0.03,
@@ -662,6 +664,7 @@ return function(Hub: any)
 		HopDistance = 180,
 		HitGap = 0.12,
 		Overpower = true,
+		SpoofPickaxe = true,
 		HitsPerSwing = 3,
 		PowerScale = 2,
 		FireFloor = 0.03,
@@ -4612,11 +4615,11 @@ Pages["Auto Gather"] = function()
     end)
 
     sectionTitle("Overpower", y); y += 34
-    local cO = card(y, 220); y += 230
+    local cO = card(y, 258); y += 268
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Rides the game's own gather remote. Extra hits share one swing so they look like one click. Power Scale only matters if the game sends a number or stores gather power on you.",
+        Text = "Same-tick extra hits after Hit Delay. Spoof Pickaxe sends the ReplicatedStorage pickaxe the server already knows — it cannot invent an inventory item the server rejects.",
         TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cO,
@@ -4629,10 +4632,13 @@ Pages["Auto Gather"] = function()
             applyGatherPower()
         end
     end)
-    sliderRow(cO, "Hits per swing", 82, 1, 8, State.HitsPerSwing, "", function(v)
+    toggleRow(cO, "Spoof Pickaxe  (send pickaxe on gather, no inventory item)", 82, State.SpoofPickaxe, function(v)
+        State.SpoofPickaxe = v
+    end)
+    sliderRow(cO, "Hits per swing", 120, 1, 8, State.HitsPerSwing, "", function(v)
         State.HitsPerSwing = math.floor(v + 0.5)
     end)
-    sliderRow(cO, "Power Scale", 140, 1, 10, State.PowerScale, "x", function(v)
+    sliderRow(cO, "Power Scale", 178, 1, 10, State.PowerScale, "x", function(v)
         State.PowerScale = v
         if State.Overpower and farmActive() then
             applyGatherPower()
@@ -6345,6 +6351,18 @@ do
             math.floor(255 * (1 - hp)), math.floor(255 * hp), 60)
     end
 
+    local function paintResourceBar(d, hp01: number, cx: number, y: number, width: number)
+        local hp = math.clamp(hp01, 0, 1)
+        local w = math.max(width, 42)
+        d.healthBg.Size = UDim2.fromOffset(w, 5)
+        d.healthBg.Position = UDim2.fromOffset(cx - w / 2, y)
+        d.healthBg.Visible = true
+        d.healthFill.Size = UDim2.new(hp, 0, 1, 0)
+        d.healthFill.Position = UDim2.fromOffset(0, 0)
+        d.healthFill.BackgroundColor3 = Color3.fromRGB(
+            math.floor(255 * (1 - hp)), math.floor(255 * hp), 60)
+    end
+
     local function placeBone(frame: Frame, ax: number, ay: number, bx: number, by: number)
         local dx, dy = bx - ax, by - ay
         local len = math.sqrt(dx * dx + dy * dy)
@@ -6525,24 +6543,97 @@ do
         return 0
     end
 
+    local function looksBarName(name: string): boolean
+        local n = string.lower(name)
+        return string.find(n, "health", 1, true) ~= nil
+            or string.find(n, "hp", 1, true) ~= nil
+            or string.find(n, "fill", 1, true) ~= nil
+            or string.find(n, "bar", 1, true) ~= nil
+            or string.find(n, "progress", 1, true) ~= nil
+    end
+
+    local function readBillboardHealth(root: Instance): (number?, number?)
+        for _, gui in root:GetDescendants() do
+            if gui:IsA("BillboardGui") or gui:IsA("SurfaceGui") then
+                for _, g in gui:GetDescendants() do
+                    if g:IsA("TextLabel") or g:IsA("TextBox") then
+                        local a, b = parseHpPair(g.Text)
+                        if a and b and b > 0 then
+                            return a, b
+                        end
+                    end
+                end
+                local namedScale: number? = nil
+                local anyScale: number? = nil
+                local namedAbs: number? = nil
+                local namedAbsMax: number? = nil
+                for _, g in gui:GetDescendants() do
+                    if g:IsA("GuiObject") then
+                        local sx = g.Size.X.Scale
+                        if sx > 0.01 and sx <= 1.001 then
+                            if looksBarName(g.Name) then
+                                namedScale = sx
+                            elseif sx < 0.999 then
+                                anyScale = sx
+                            end
+                        end
+                        if looksBarName(g.Name) and g.Parent and g.Parent:IsA("GuiObject") then
+                            local pw = (g.Parent :: GuiObject).AbsoluteSize.X
+                            local cw = g.AbsoluteSize.X
+                            if pw > 4 and cw >= 0 and cw <= pw + 1 then
+                                namedAbs = cw
+                                namedAbsMax = pw
+                            end
+                        end
+                    end
+                end
+                if namedScale then
+                    return namedScale, 1
+                end
+                if namedAbs and namedAbsMax then
+                    return namedAbs, namedAbsMax
+                end
+                if anyScale then
+                    return anyScale, 1
+                end
+            end
+        end
+        return nil, nil
+    end
+
     local function resourceHealth(obj: Instance): (number?, number?)
         local rec = resourceHP[obj]
         local hp, maxHp
-        for _, key in HP_KEYS do
-            local a, b = parseHpPair(valueFrom(obj, key))
+        local roots = { obj }
+        if obj.Parent and obj.Parent ~= workspace then
+            table.insert(roots, obj.Parent)
+        end
+        for _, root in roots do
+            local a, b = readBillboardHealth(root)
             if a then
-                hp = a
-                maxHp = b
+                hp, maxHp = a, b
                 break
             end
-        end
-        if not maxHp then
-            for _, key in MAX_KEYS do
-                local a = parseHpPair(valueFrom(obj, key))
-                if a then
-                    maxHp = a
+            for _, key in HP_KEYS do
+                local va, vb = parseHpPair(valueFrom(root, key))
+                if va then
+                    hp = va
+                    maxHp = vb
                     break
                 end
+            end
+            if hp then break end
+        end
+        if not maxHp then
+            for _, root in roots do
+                for _, key in MAX_KEYS do
+                    local a = parseHpPair(valueFrom(root, key))
+                    if a then
+                        maxHp = a
+                        break
+                    end
+                end
+                if maxHp then break end
             end
         end
         local vol = volumeOf(obj)
@@ -6562,7 +6653,7 @@ do
             end
             return rec.hp, rec.max
         end
-        if vol > 0 and rec.vol > 0 then
+        if vol > 0 and rec.vol > 0 and vol < rec.vol * 0.98 then
             return vol, rec.vol
         end
         return nil, nil
@@ -6576,9 +6667,13 @@ do
         local topPt = cam:WorldToViewportPoint(worldPos + Vector3.new(0, heightStuds / 2, 0))
         local bottomPt = cam:WorldToViewportPoint(worldPos - Vector3.new(0, heightStuds / 2, 0))
         local heightPx = math.abs(topPt.Y - bottomPt.Y)
-        if heightPx < 4 or heightPx > 4000 then hideDrawing(d); return end
-        local widthPx = math.max(heightPx * 0.55, 8)
+        if heightPx > 4000 then hideDrawing(d); return end
         local boxY = math.min(topPt.Y, bottomPt.Y)
+        if heightPx < 8 then
+            heightPx = 8
+            boxY = center.Y - 4
+        end
+        local widthPx = math.max(heightPx * 0.55, 16)
         local isPlayer = kind == "player"
         info = info or {}
 
@@ -6600,7 +6695,11 @@ do
 
         if (isPlayer and State.PlayerDistance) or (not isPlayer and State.ResourceDistance) then
             d.distLabel.Text = string.format("%dm", math.floor(distance + 0.5))
-            d.distLabel.Position = UDim2.fromOffset(center.X - 80, boxY + heightPx + 2)
+            local distY = boxY + heightPx + 2
+            if not isPlayer and State.ResourceHealth then
+                distY += 8
+            end
+            d.distLabel.Position = UDim2.fromOffset(center.X - 80, distY)
             d.distLabel.Visible = true
         else
             d.distLabel.Visible = false
@@ -6657,12 +6756,20 @@ do
                 hp01 = math.clamp(hp / maxh, 0, 1)
             end
             if State.ResourceHealth and hp01 then
-                paintHealthBar(d, hp01, center.X - widthPx / 2 - 6, boxY, heightPx)
+                local barY = boxY + heightPx + 2
+                paintResourceBar(d, hp01, center.X, barY, math.max(widthPx, 48))
+                if State.ResourceDistance then
+                    -- Keep distance under the bar instead of covering it.
+                end
             else
                 d.healthBg.Visible = false
             end
             if State.ResourceHealthText and hp and maxh then
-                table.insert(lines, string.format("HP %s/%s", fmtStat(hp), fmtStat(maxh)))
+                if maxh <= 1.001 then
+                    table.insert(lines, string.format("HP %d%%", math.floor(hp01 and hp01 * 100 or 0)))
+                else
+                    table.insert(lines, string.format("HP %s/%s", fmtStat(hp), fmtStat(maxh)))
+                end
             end
         end
 
@@ -6769,9 +6876,10 @@ do
                         onView = sp.X > -80 and sp.Y > -80 and sp.X < view.X + 80 and sp.Y < view.Y + 80
                     end
                 end
+                local _p, height = boundsOf(obj)
                 table.insert(candidates, {
                     inst = obj, kind = kind, pos = pos,
-                    dist = dist, height = 5, onView = onView,
+                    dist = dist, height = height or 5, onView = onView,
                 })
             end)
             table.sort(candidates, function(a, b)
@@ -7167,8 +7275,9 @@ end
 local Pin = { since = 0, restUntil = 0, drifted = 0 }
 
 local function pinAllowed(): boolean
-    -- Teleport Gather must stay planted or the stand pose walks around the node.
-    if State.TeleportGather and Farm.mining then return true end
+    -- Anchored roots are ignored by Gathering. Teleport Gather holds pose
+    -- with CFrame writes instead of a pin.
+    if State.TeleportGather then return false end
     if State.UsePin ~= true then return false end
     -- Never drop the pin mid-cluster. High ping plus an unanchored CFrame hold
     -- is exactly the slide-off you already solved with the pin.
@@ -7912,6 +8021,53 @@ local function scalePacked(packed: any): any
     return out
 end
 
+local pickaxeCache = { inst = nil :: Instance?, scanned = false, logged = false }
+
+local function nameLooksPick(name: string): boolean
+    local n = string.lower(name)
+    return string.find(n, "pickaxe", 1, true) ~= nil
+        or string.find(n, "pick axe", 1, true) ~= nil
+        or n == "pick"
+end
+
+local function scanForPickaxe(root: Instance): Instance?
+    for _, d in root:GetDescendants() do
+        if (d:IsA("Tool") or d:IsA("Folder") or d:IsA("Model")) and nameLooksPick(d.Name) then
+            return d
+        end
+    end
+    return nil
+end
+
+local function pickaxeTemplate(): Instance?
+    if pickaxeCache.scanned and pickaxeCache.inst and pickaxeCache.inst.Parent then
+        return pickaxeCache.inst
+    end
+    pickaxeCache.scanned = true
+    local roots: { Instance } = { ReplicatedStorage }
+    pcall(function()
+        table.insert(roots, game:GetService("StarterPack"))
+    end)
+    pcall(function()
+        table.insert(roots, game:GetService("Lighting"))
+    end)
+    local bag = player:FindFirstChild("Backpack")
+    if bag then table.insert(roots, bag) end
+    if player.Character then table.insert(roots, player.Character) end
+    for _, root in roots do
+        local hit = scanForPickaxe(root)
+        if hit then
+            pickaxeCache.inst = hit
+            if not pickaxeCache.logged then
+                pickaxeCache.logged = true
+                log("Pickaxe template: " .. hit:GetFullName())
+            end
+            return hit
+        end
+    end
+    return nil
+end
+
 local function packForTarget(model: Instance, part: BasePart?): any
     local learned = GatherTap.learned
     if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
@@ -7924,11 +8080,12 @@ local function packForTarget(model: Instance, part: BasePart?): any
         end
         return scalePacked(out)
     end
-    if State.Overpower and clampNum(State.PowerScale, 1, 10, 2) > 1 then
-        return table.pack(model, clampNum(State.PowerScale, 1, 10, 2))
-    end
-    if part and part ~= model then
-        return table.pack(model)
+    if State.SpoofPickaxe then
+        local tool = pickaxeTemplate()
+        if tool then
+            return table.pack(model, tool)
+        end
+        return table.pack(model, "Pickaxe")
     end
     return table.pack(model)
 end
@@ -7947,6 +8104,11 @@ local function fireGather(inst: Instance): boolean
         task.wait(floor - gap)
     end
     lastFireAt = os.clock()
+    local root = getRoot()
+    if root and root.Anchored then
+        root.Anchored = false
+        movementLocked = false
+    end
     local model = folderChild(inst) or inst
     local part = liveHarvestPart(inst)
     local packed = packForTarget(model, part)
@@ -7955,13 +8117,17 @@ local function fireGather(inst: Instance): boolean
         hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
     end
     GatherTap.ourFire = true
-    local hit = firePacked(remote, packed)
+    -- Proven shape first. Extra pickaxe / burst args cannot block this hit.
+    local hit = firePacked(remote, table.pack(model))
+    if packed.n ~= 1 or packed[1] ~= model then
+        firePacked(remote, packed)
+    end
     if hit and hits > 1 then
         for i = 2, hits do
             if part and part ~= model and i % 2 == 0 then
-                firePacked(remote, scalePacked(table.pack(part)))
+                firePacked(remote, table.pack(part))
             else
-                firePacked(remote, packed)
+                firePacked(remote, table.pack(model))
             end
         end
     elseif hit and part and part ~= model and not State.Overpower then
@@ -8103,9 +8269,12 @@ local function snapTeleport(obj: Instance?, treePos: Vector3)
         r.AssemblyAngularVelocity = Vector3.zero
         r.CFrame = flatLook(dest, treePos)
     end)
-    lockMovement()
+    -- Do not leave the root anchored. Gathering ignores anchored characters,
+    -- which is why Teleport Gather moved you and never broke the node.
+    unlockMovement()
     root = getRoot()
     if root then
+        root.Anchored = false
         root.CFrame = flatLook(dest, treePos)
     end
     return true
@@ -8490,7 +8659,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.8 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.9 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
