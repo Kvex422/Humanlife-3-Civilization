@@ -49,6 +49,9 @@ return function(Hub: any)
     local cancelMoveTween
     local unlockMovement
     local clearNodeOffsets
+    local applyGatherPower
+    local restoreGatherPower
+    local farmActive
     local aimbotCleanup
     local fovCircleGui, fovCircle
 
@@ -397,6 +400,7 @@ Stealth.presets = {
         GatherSpeed = 100, SoftTeleportSpeed = 600, HopDistance = 400,
         MaxVelocity = 400, LandSpread = 0, FireFloor = 0.02,
         SkipSeconds = 6, ClusterRadius = 70, ClusterSeconds = 45,
+        Overpower = true, HitsPerSwing = 4, PowerScale = 3,
     },
     Balanced = {
         SoftTeleport = false, TravelHops = true, UsePin = true, PinMax = 8,
@@ -404,6 +408,7 @@ Stealth.presets = {
         GatherSpeed = 80, SoftTeleportSpeed = 300, HopDistance = 180,
         MaxVelocity = 220, LandSpread = 1.4, FireFloor = 0.03,
         SkipSeconds = 8, ClusterRadius = 90, ClusterSeconds = 60,
+        Overpower = true, HitsPerSwing = 3, PowerScale = 2,
     },
     Safe = {
         SoftTeleport = true, TravelHops = true, UsePin = false, PinMax = 0,
@@ -411,6 +416,7 @@ Stealth.presets = {
         GatherSpeed = 45, SoftTeleportSpeed = 140, HopDistance = 90,
         MaxVelocity = 120, LandSpread = 2.6, FireFloor = 0.06,
         SkipSeconds = 12, ClusterRadius = 120, ClusterSeconds = 90,
+        Overpower = true, HitsPerSwing = 2, PowerScale = 1,
     },
 }
 
@@ -1567,7 +1573,7 @@ Pages["Auto Gather"] = function()
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 28), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
-        Text = "Hit Delay on Modes paces every swing (Auto, Teleport, Gather Around, and Legit). This range is only how far Gather Around reaches.",
+        Text = "Hit Delay is the pause between swings. Overpower stacks extra hits on the same tick after that pause — it does not spam faster than the delay.",
         TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
         TextXAlignment = Enum.TextXAlignment.Left,
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cT,
@@ -1577,6 +1583,34 @@ Pages["Auto Gather"] = function()
     sliderRow(cT, "Hit Delay (same as Modes)", 156, 0.05, 3, State.HitGap, "s", function(v)
         State.HitGap = v
         State.LegitHitDelay = math.clamp(v, 0.4, 5)
+    end)
+
+    sectionTitle("Overpower", y); y += 34
+    local cO = card(y, 220); y += 230
+    new("TextLabel", {
+        Size = UDim2.new(1, -32, 0, 32), Position = UDim2.fromOffset(16, 8),
+        BackgroundTransparency = 1, Font = Theme.Font,
+        Text = "Rides the game's own gather remote. Extra hits share one swing so they look like one click. Power Scale only matters if the game sends a number or stores gather power on you.",
+        TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, Parent = cO,
+    })
+    toggleRow(cO, "Overpower  (same-tick extra hits + power spoof)", 44, State.Overpower, function(v)
+        State.Overpower = v
+        if not v then
+            restoreGatherPower()
+        elseif farmActive() then
+            applyGatherPower()
+        end
+    end)
+    sliderRow(cO, "Hits per swing", 82, 1, 8, State.HitsPerSwing, "", function(v)
+        State.HitsPerSwing = math.floor(v + 0.5)
+    end)
+    sliderRow(cO, "Power Scale", 140, 1, 10, State.PowerScale, "x", function(v)
+        State.PowerScale = v
+        if State.Overpower and farmActive() then
+            applyGatherPower()
+        end
     end)
 
     sectionTitle("Stealth Profile", y); y += 34
@@ -4231,15 +4265,214 @@ end
 local lastFireLog = 0
 local lastFireAt = 0
 
-local function fireGatherOnce(remote: Instance, target: Instance): boolean
+-- Overpower rides the game's Gathering remote instead of inventing a new one.
+-- 1. Learn the real FireServer/InvokeServer args when the game swings.
+-- 2. After Hit Delay, fire that payload several times on the same tick so a
+--    cooldown-then-apply server can accept more than one hit per swing.
+-- 3. Scale numeric args and any gather-power values sitting on the character.
+local GatherTap = {
+    hooked = false,
+    ourFire = false,
+    learned = nil :: any,
+    loggedLearn = false,
+    origNamecall = nil :: any,
+}
+
+local POWER_SKIP = {
+    health = true, hp = true, gold = true, money = true, cash = true,
+    wood = true, stone = true, iron = true, count = true, amount = true,
+    exp = true, xp = true, level = true, hunger = true, thirst = true,
+}
+
+local function looksGatherPower(name: string): boolean
+    local n = string.lower(name)
+    n = string.gsub(n, "[%s_%-]", "")
+    if POWER_SKIP[n] then return false end
+    if string.find(n, "jump", 1, true) or string.find(n, "walk", 1, true) then
+        return false
+    end
+    return string.find(n, "damage", 1, true) ~= nil
+        or string.find(n, "power", 1, true) ~= nil
+        or string.find(n, "mining", 1, true) ~= nil
+        or string.find(n, "gather", 1, true) ~= nil
+        or string.find(n, "strength", 1, true) ~= nil
+        or string.find(n, "harvest", 1, true) ~= nil
+        or string.find(n, "axe", 1, true) ~= nil
+        or string.find(n, "pickaxe", 1, true) ~= nil
+        or string.find(n, "efficiency", 1, true) ~= nil
+        or string.find(n, "multiplier", 1, true) ~= nil
+end
+
+local function executorFn(name: string): any?
+    local ok, fn = pcall(function()
+        local env = getfenv(0) :: any
+        if type(env[name]) == "function" then
+            return env[name]
+        end
+        if type(env.getgenv) == "function" then
+            local g = env.getgenv()
+            if type(g) == "table" and type(g[name]) == "function" then
+                return g[name]
+            end
+        end
+        return nil
+    end)
+    if ok and type(fn) == "function" then
+        return fn
+    end
+    return nil
+end
+
+local function rememberGatherArgs(...)
+    GatherTap.learned = table.pack(...)
+    if not GatherTap.loggedLearn then
+        GatherTap.loggedLearn = true
+        log("Gather payload learned (" .. tostring(GatherTap.learned.n) .. " arg(s))")
+    end
+end
+
+local function installGatherHook(remote: Instance)
+    if GatherTap.hooked or not remote.Parent then return end
+    local hookmeta = executorFn("hookmetamethod")
+    local getmethod = executorFn("getnamecallmethod")
+    local wrap = executorFn("newcclosure")
+    if type(hookmeta) ~= "function" or type(getmethod) ~= "function" then
+        return
+    end
+    local function body(self: any, ...: any)
+        local prev = GatherTap.origNamecall
+        if type(prev) ~= "function" then
+            return
+        end
+        local method = getmethod()
+        if self == remote and (method == "FireServer" or method == "InvokeServer") then
+            if not GatherTap.ourFire then
+                rememberGatherArgs(...)
+                if State.Overpower then
+                    local hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
+                    if hits > 1 then
+                        local first = prev(self, ...)
+                        GatherTap.ourFire = true
+                        for _ = 2, hits do
+                            pcall(prev, self, ...)
+                        end
+                        GatherTap.ourFire = false
+                        return first
+                    end
+                end
+            end
+        end
+        return prev(self, ...)
+    end
+    local hooked = if type(wrap) == "function" then wrap(body) else body
+    local ok, old = pcall(function()
+        return hookmeta(game, "__namecall", hooked)
+    end)
+    if ok and type(old) == "function" then
+        GatherTap.origNamecall = old
+        GatherTap.hooked = true
+        log("Gather remote hooked — extra hits ride the game swing")
+    end
+end
+
+local powerSpoof = {
+    values = {} :: { [Instance]: number },
+    attrs = {} :: { [string]: { inst: Instance, name: string, value: number } },
+}
+
+restoreGatherPower = function()
+    for inst, val in powerSpoof.values do
+        if inst.Parent then
+            pcall(function()
+                (inst :: any).Value = val
+            end)
+        end
+    end
+    table.clear(powerSpoof.values)
+    for _, rec in powerSpoof.attrs do
+        if rec.inst.Parent then
+            pcall(function()
+                rec.inst:SetAttribute(rec.name, rec.value)
+            end)
+        end
+    end
+    table.clear(powerSpoof.attrs)
+end
+
+local function spoofValue(inst: Instance, scale: number)
+    local val = (inst :: any).Value
+    if type(val) ~= "number" or val <= 0 then return end
+    if powerSpoof.values[inst] == nil then
+        powerSpoof.values[inst] = val
+    end
+    local base = powerSpoof.values[inst]
+    local nextVal = base * scale
+    if inst:IsA("IntValue") then
+        nextVal = math.floor(nextVal + 0.5)
+    end
+    pcall(function()
+        (inst :: any).Value = nextVal
+    end)
+end
+
+local function spoofAttrs(inst: Instance, scale: number)
+    local ok, attrs = pcall(function()
+        return inst:GetAttributes()
+    end)
+    if not ok or type(attrs) ~= "table" then return end
+    for name, val in attrs do
+        if type(name) == "string" and type(val) == "number" and val > 0 and looksGatherPower(name) then
+            local key = inst:GetFullName() .. "@" .. name
+            if powerSpoof.attrs[key] == nil then
+                powerSpoof.attrs[key] = { inst = inst, name = name, value = val }
+            end
+            local base = powerSpoof.attrs[key].value
+            pcall(function()
+                inst:SetAttribute(name, base * scale)
+            end)
+        end
+    end
+end
+
+applyGatherPower = function()
+    if not State.Overpower then
+        restoreGatherPower()
+        return
+    end
+    local scale = clampNum(State.PowerScale, 1, 10, 2)
+    if scale <= 1 then return end
+    local roots: { Instance } = { player }
+    local char = player.Character
+    if char then table.insert(roots, char) end
+    local bag = player:FindFirstChild("Backpack")
+    if bag then table.insert(roots, bag) end
+    local ls = player:FindFirstChild("leaderstats")
+    if ls then table.insert(roots, ls) end
+    for _, root in roots do
+        spoofAttrs(root, scale)
+        if looksGatherPower(root.Name) and (root:IsA("NumberValue") or root:IsA("IntValue")) then
+            spoofValue(root, scale)
+        end
+        for _, d in root:GetDescendants() do
+            spoofAttrs(d, scale)
+            if looksGatherPower(d.Name) and (d:IsA("NumberValue") or d:IsA("IntValue")) then
+                spoofValue(d, scale)
+            end
+        end
+    end
+end
+
+local function firePacked(remote: Instance, packed: any): boolean
+    local n = packed.n
+    if type(n) ~= "number" then n = #packed end
     local ok, err
     if remote:IsA("RemoteEvent") then
         ok, err = pcall(function()
-            (remote :: RemoteEvent):FireServer(target)
+            (remote :: RemoteEvent):FireServer(table.unpack(packed, 1, n))
         end)
     elseif remote:IsA("RemoteFunction") then
         ok, err = pcall(function()
-            (remote :: RemoteFunction):InvokeServer(target)
+            (remote :: RemoteFunction):InvokeServer(table.unpack(packed, 1, n))
         end)
     else
         return false
@@ -4255,9 +4488,52 @@ local function fireGatherOnce(remote: Instance, target: Instance): boolean
     return true
 end
 
+local function scalePacked(packed: any): any
+    local scale = clampNum(State.PowerScale, 1, 10, 2)
+    local out = table.pack(table.unpack(packed, 1, packed.n))
+    local hadNumber = false
+    for i = 1, out.n do
+        if type(out[i]) == "number" then
+            out[i] = out[i] * scale
+            hadNumber = true
+        end
+    end
+    if State.Overpower and not hadNumber and scale > 1 then
+        out.n += 1
+        out[out.n] = scale
+    end
+    return out
+end
+
+local function packForTarget(model: Instance, part: BasePart?): any
+    local learned = GatherTap.learned
+    if type(learned) == "table" and type(learned.n) == "number" and learned.n > 0 then
+        local out = table.pack(table.unpack(learned, 1, learned.n))
+        for i = 1, out.n do
+            local v = out[i]
+            if typeof(v) == "Instance" and ResourcesFolder and (v :: Instance):IsDescendantOf(ResourcesFolder) then
+                out[i] = model
+            end
+        end
+        return scalePacked(out)
+    end
+    if State.Overpower and clampNum(State.PowerScale, 1, 10, 2) > 1 then
+        return table.pack(model, clampNum(State.PowerScale, 1, 10, 2))
+    end
+    if part and part ~= model then
+        return table.pack(model)
+    end
+    return table.pack(model)
+end
+
+local function fireGatherOnce(remote: Instance, target: Instance): boolean
+    return firePacked(remote, table.pack(target))
+end
+
 local function fireGather(inst: Instance): boolean
     local remote = GatherRemote
     if not remote or not remote.Parent then return false end
+    installGatherHook(remote)
     local gap = os.clock() - lastFireAt
     local floor = hitGap()
     if gap < floor then
@@ -4266,15 +4542,26 @@ local function fireGather(inst: Instance): boolean
     lastFireAt = os.clock()
     local model = folderChild(inst) or inst
     local part = liveHarvestPart(inst)
-    local hit = fireGatherOnce(remote, model)
-    -- Same swing, second target: the harvest part if the server keys on that
-    -- instead of the folder child. Then a repeat on the model so one Hit Delay
-    -- tick is two remotes, not one sound with no extra yield.
-    if part and part ~= model then
-        fireGatherOnce(remote, part)
+    local packed = packForTarget(model, part)
+    local hits = 1
+    if State.Overpower then
+        hits = math.floor(clampNum(State.HitsPerSwing, 1, 8, 3) + 0.5)
     end
+    GatherTap.ourFire = true
+    local hit = firePacked(remote, packed)
+    if hit and hits > 1 then
+        for i = 2, hits do
+            if part and part ~= model and i % 2 == 0 then
+                firePacked(remote, scalePacked(table.pack(part)))
+            else
+                firePacked(remote, packed)
+            end
+        end
+    elseif hit and part and part ~= model and not State.Overpower then
+        firePacked(remote, table.pack(part))
+    end
+    GatherTap.ourFire = false
     if hit then
-        fireGatherOnce(remote, model)
         FarmStats.noteSwing()
     end
     return hit
@@ -4290,7 +4577,8 @@ local function mineCluster(radius: number, keepGoing: () -> boolean): number
     for _, r in around do
         if not keepGoing() then break end
         if r.inst.Parent then
-            for _ = 1, SWINGS do
+            local swings = if State.Overpower then 1 else SWINGS
+            for _ = 1, swings do
                 if not keepGoing() or not r.inst.Parent then break end
                 if fireGather(r.inst) then fired += 1 end
             end
@@ -4479,7 +4767,8 @@ local function drainUntilGone(radius: number, inst: Instance?, pos: Vector3?, ke
         if aim then pinAt(inst, aim) end
         local targetLive = inst ~= nil and inst.Parent ~= nil
         if targetLive and inst then
-            for _ = 1, SWINGS do
+            local swings = if State.Overpower then 1 else SWINGS
+            for _ = 1, swings do
                 if not keepGoing() or not inst.Parent then break end
                 if fireGather(inst) then fired += 1 end
             end
@@ -4577,7 +4866,7 @@ do
     end
 end
 
-local function farmActive(): boolean
+farmActive = function(): boolean
     return State.AutoGather or State.GatherAround or State.TeleportGather or State.LegitMode
 end
 
@@ -4609,11 +4898,15 @@ local function farmPass()
             table.clear(Farm.skipUntil)
             table.clear(Farm.recentMines)
             clearNodeOffsets()
+            restoreGatherPower()
         end
         setFarmStatus("Idle\nTarget —  ·  Distance —", Theme.Danger)
         return
     end
     farmJob.wasFarming = true
+    if State.Overpower then
+        applyGatherPower()
+    end
 
     tryBindGather()
     local needRemote = State.AutoGather or State.GatherAround or State.TeleportGather
@@ -4790,7 +5083,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.6 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("2.0.7 ready  ·  %d nodes indexed", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature
@@ -4830,6 +5123,9 @@ end)
                 local cam = workspace.CurrentCamera
                 if cam then cam.FieldOfView = State.FOV end
             end)
+            if State.Overpower and farmActive and farmActive() then
+                task.defer(applyGatherPower)
+            end
         end)
         Hub.Lifecycle.onHumanoid(function(hum: Humanoid)
             if Flags.Unloading then return end
@@ -4839,6 +5135,9 @@ end)
             if Flags.Unloading then return end
             if cancelMoveTween then pcall(cancelMoveTween) end
             if unlockMovement then pcall(unlockMovement) end
+        end)
+        Hub.Lifecycle.onUnload(function()
+            if restoreGatherPower then pcall(restoreGatherPower) end
         end)
         Hub.Lifecycle.onCameraChanged(function(cam: Camera)
             if Flags.Unloading then return end
