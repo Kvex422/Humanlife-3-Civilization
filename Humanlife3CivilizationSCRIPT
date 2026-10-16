@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.16 bundled from src/. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.17 bundled from src/. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -297,10 +297,11 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.16",
+		script = "2.0.17",
 		builtAt = "2026-10-16",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.17  Perf pass 2: scheduler caches job order (no per-frame sort), resource health scans throttled.",
 			"2.0.16  Gather perf: cached node positions/bounds, lighter discovery. Auto Farm only touches your own plots.",
 			"2.0.15  Crop farm: plant per-plot RemoteEvent, water via prompt, harvest via gathering remote.",
 			"2.0.14  Farming page: auto-harvest crops and animals, learned farm remote, anti-cheat WalkSpeed guard.",
@@ -1534,9 +1535,18 @@ return function(Hub: any)
 
 	local Scheduler = {}
 	local phases: { [string]: { [string]: Job } } = { render = {}, logic = {} }
+	-- Cached execution order per phase. Rebuilt only when a job is added or
+	-- removed, so the per-frame path does no allocation or sorting at all.
+	local phaseOrder: { [string]: { string } } = { render = {}, logic = {} }
+	local orderDirty: { [string]: boolean } = { render = true, logic = true }
 	local runningName: string? = nil
 	local MAX_ERRORS = 12
 	local DEFAULT_BUDGET = 0.008
+
+	local function markOrderDirty()
+		orderDirty.render = true
+		orderDirty.logic = true
+	end
 
 	local function jobKey(group: string, name: string): string
 		if group == "" or group == "root" then
@@ -1545,18 +1555,23 @@ return function(Hub: any)
 		return group .. ":" .. name
 	end
 
-	local function sortedNames(list: { [string]: Job }): { string }
-		local names = {}
-		for name in list do
-			table.insert(names, name)
-		end
-		table.sort(names, function(a, b)
-			local ja, jb = list[a], list[b]
-			if ja.priority == jb.priority then
-				return a < b
+	local function namesFor(phaseName: string): { string }
+		local names = phaseOrder[phaseName]
+		if orderDirty[phaseName] then
+			local list = phases[phaseName]
+			table.clear(names)
+			for name in list do
+				table.insert(names, name)
 			end
-			return ja.priority < jb.priority
-		end)
+			table.sort(names, function(a, b)
+				local ja, jb = list[a], list[b]
+				if ja.priority == jb.priority then
+					return a < b
+				end
+				return ja.priority < jb.priority
+			end)
+			orderDirty[phaseName] = false
+		end
 		return names
 	end
 
@@ -1566,7 +1581,7 @@ return function(Hub: any)
 		end
 		local now = os.clock()
 		local list = phases[phaseName]
-		for _, name in sortedNames(list) do
+		for _, name in namesFor(phaseName) do
 			local job = list[name]
 			if not job or job.disabled then
 				continue
@@ -1637,11 +1652,13 @@ return function(Hub: any)
 			runs = 0,
 			lastMs = 0,
 		}
+		markOrderDirty()
 	end
 
 	function Scheduler.remove(name: string)
 		phases.render[name] = nil
 		phases.logic[name] = nil
+		markOrderDirty()
 	end
 
 	function Scheduler.removeGroup(group: string)
@@ -1653,6 +1670,7 @@ return function(Hub: any)
 				end
 			end
 		end
+		markOrderDirty()
 	end
 
 	function Scheduler.removeByOwner(owner: string)
@@ -1663,6 +1681,7 @@ return function(Hub: any)
 				end
 			end
 		end
+		markOrderDirty()
 	end
 
 	function Scheduler.removePages()
@@ -1674,11 +1693,13 @@ return function(Hub: any)
 				end
 			end
 		end
+		markOrderDirty()
 	end
 
 	function Scheduler.clear()
 		table.clear(phases.render)
 		table.clear(phases.logic)
+		markOrderDirty()
 	end
 
 	function Scheduler.snapshot(): { { name: string, phase: string, errors: number, lastMs: number, disabled: boolean } }
@@ -7105,7 +7126,7 @@ do
 
     local HP_KEYS = { "Health", "HP", "Hits", "Durability", "Lives", "Remaining" }
     local MAX_KEYS = { "MaxHealth", "MaxHP", "MaxHits", "MaxDurability", "Max" }
-    local resourceHP: { [Instance]: { hp: number, max: number, vol: number } } = {}
+        local resourceHP: { [Instance]: { hp: number, max: number, vol: number, at: number } } = {}
 
     local function parseHpPair(v: any): (number?, number?)
         if type(v) == "number" then
@@ -7196,7 +7217,13 @@ do
     end
 
     local function resourceHealth(obj: Instance): (number?, number?)
+        local now = os.clock()
         local rec = resourceHP[obj]
+        -- HP bars and the bounding-box measurement below are costly; a molecule
+        -- of staleness is invisible, so reuse the last reading for a moment.
+        if rec and now - (rec.at or 0) < 0.25 then
+            return rec.hp, rec.max
+        end
         local hp, maxHp
         local roots = { obj }
         if obj.Parent and obj.Parent ~= workspace then
@@ -7231,24 +7258,29 @@ do
             end
         end
         local vol = volumeOf(obj)
-        if not rec then
-            rec = { hp = hp or 1, max = maxHp or hp or 1, vol = math.max(vol, 0.01) }
-            resourceHP[obj] = rec
+        local entry: { hp: number, max: number, vol: number, at: number }
+        local existing = resourceHP[obj]
+        if existing then
+            entry = existing
+        else
+            entry = { hp = hp or 1, max = maxHp or hp or 1, vol = math.max(vol, 0.01), at = now }
+            resourceHP[obj] = entry
         end
-        if vol > rec.vol then
-            rec.vol = vol
+        entry.at = now
+        if vol > entry.vol then
+            entry.vol = vol
         end
         if hp then
-            rec.hp = hp
+            entry.hp = hp
             if maxHp then
-                rec.max = math.max(maxHp, hp)
-            elseif hp > rec.max then
-                rec.max = hp
+                entry.max = math.max(maxHp, hp)
+            elseif hp > entry.max then
+                entry.max = hp
             end
-            return rec.hp, rec.max
+            return entry.hp, entry.max
         end
-        if vol > 0 and rec.vol > 0 and vol < rec.vol * 0.98 then
-            return vol, rec.vol
+        if vol > 0 and entry.vol > 0 and vol < entry.vol * 0.98 then
+            return vol, entry.vol
         end
         return nil, nil
     end
