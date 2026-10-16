@@ -43,23 +43,66 @@ return function(Hub: any)
 	-- ============================================================
 	local Farming = {}
 
-	local BUILDINGS = "Buildings"
-	local SLOT_COUNT = 6
+	-- Keys checked on the plot model, both as attributes and as child instances.
+	-- Owner data in this game is not documented, so match anything plausible.
+	local OWNER_KEYS = {
+		"Owner", "owner", "OwnerName", "OwnerId", "OwnerUserId",
+		"Player", "PlayerName", "UserId", "User", "Username",
+		"Farmer", "FarmOwner", "OwnerPlayer", "PlotOwner",
+	}
+
+	local farmCache: { list: { Model }, at: number } = { list = {}, at = 0 }
+	local ownerCache: { [Instance]: { cands: { any }, at: number } } = {}
 
 	local function isFarmModel(inst: Instance): boolean
 		return inst:IsA("Model") and string.sub(inst.Name, 1, 4) == "Farm"
 	end
 
-	-- Every plot model under workspace.Buildings whose name starts with "Farm".
+	-- Every plot model named "Farm*". Cached briefly: the farm loop asks for this
+	-- several times a second and the plot set rarely changes.
 	function Farming.farms(): { Model }
+		local now = os.clock()
+		if now - farmCache.at < 1 and #farmCache.list > 0 then
+			local live = true
+			for _, m in farmCache.list do
+				if not m.Parent then
+					live = false
+					break
+				end
+			end
+			if live then return farmCache.list end
+		end
+		farmCache.at = now
 		local out: { Model } = {}
-		local buildings = workspace:FindFirstChild(BUILDINGS)
-		if not buildings then return out end
-		for _, child in buildings:GetChildren() do
-			if isFarmModel(child) then
-				table.insert(out, child :: Model)
+		local seen: { [Instance]: boolean } = {}
+		local function add(inst: Instance)
+			if isFarmModel(inst) and not seen[inst] then
+				seen[inst] = true
+				table.insert(out, inst :: Model)
 			end
 		end
+		-- Preferred home, then fallbacks, then a shallow workspace sweep so a
+		-- renamed container does not hide every plot.
+		for _, name in { "Buildings", "Farms", "Plots", "FarmPlots" } do
+			local container = workspace:FindFirstChild(name)
+			if container then
+				for _, child in container:GetChildren() do
+					add(child)
+				end
+			end
+		end
+		if #out == 0 then
+			for _, child in workspace:GetChildren() do
+				if isFarmModel(child) then
+					add(child)
+				elseif child:IsA("Folder") or child:IsA("Model") then
+					for _, sub in child:GetChildren() do
+						add(sub)
+					end
+				end
+			end
+		end
+		farmCache.list = out
 		return out
 	end
 
@@ -69,7 +112,81 @@ return function(Hub: any)
 		if r and r:IsA("RemoteEvent") then
 			return r
 		end
+		local any = farm:FindFirstChildOfClass("RemoteEvent")
+		if any then return any end
 		return nil
+	end
+
+	-- Every plausible owner value on a plot (attributes first, then children).
+	-- Cached briefly so the per-pass filter does no repeated FindFirstChild work.
+	function Farming.ownerCandidates(farm: Model): { any }
+		local now = os.clock()
+		local hit = ownerCache[farm]
+		if hit and now - hit.at < 2 then return hit.cands end
+		local out: { any } = {}
+		for _, key in OWNER_KEYS do
+			local a = farm:GetAttribute(key)
+			if a ~= nil then
+				table.insert(out, a)
+			end
+		end
+		for _, child in farm:GetChildren() do
+			if child:IsA("ValueBase") then
+				local cname = string.lower(child.Name)
+				if string.find(cname, "owner", 1, true)
+					or string.find(cname, "player", 1, true)
+					or string.find(cname, "user", 1, true)
+					or string.find(cname, "farmer", 1, true) then
+					table.insert(out, (child :: any).Value)
+				end
+			end
+		end
+		local entry = { cands = out, at = os.clock() }
+		ownerCache[farm] = entry
+		return entry.cands
+	end
+
+	function Farming.hasOwnerInfo(farm: Model): boolean
+		return #Farming.ownerCandidates(farm) > 0
+	end
+
+	local function identityMatches(candidate: any, name: string, display: string, uid: number): boolean
+		if candidate == nil then return false end
+		local kind = type(candidate)
+		if kind == "number" then
+			return candidate == uid
+		end
+		if kind == "string" then
+			local c = string.lower(candidate)
+			return c == string.lower(name) or c == string.lower(display) or c == tostring(uid)
+		end
+		if typeof(candidate) == "Instance" then
+			local inst = candidate :: any
+			if inst:IsA("Player") then
+				return inst.UserId == uid
+			end
+			if inst:IsA("ValueBase") then
+				return identityMatches(inst.Value, name, display, uid)
+			end
+			return inst.Name == name
+		end
+		return false
+	end
+
+	-- True only when a plot carries ownership info naming this player. A plot
+	-- with no ownership info returns false, so "only my plots" never grabs a
+	-- stranger's farm just because the owner field was missing.
+	function Farming.ownedBy(farm: Model, player: any): boolean
+		if not player then return false end
+		local name = player.Name
+		local display = player.DisplayName or name
+		local uid = player.UserId
+		for _, c in Farming.ownerCandidates(farm) do
+			if identityMatches(c, name, display, uid) then
+				return true
+			end
+		end
+		return false
 	end
 
 	-- Grown/harvestable crops: descendants named after a catalog crop.
@@ -100,7 +217,7 @@ return function(Hub: any)
 	end
 
 	function Farming.slotCount(): number
-		return SLOT_COUNT
+		return 6
 	end
 
 	-- Totals for the UI: farms found, ready crops, water prompts.
@@ -112,6 +229,12 @@ return function(Hub: any)
 			water += #Farming.waterPrompts(farm)
 		end
 		return { farms = farms, crops = crops, water = water }
+	end
+
+	function Farming.resetCache()
+		farmCache.at = 0
+		table.clear(farmCache.list)
+		table.clear(ownerCache)
 	end
 
 	Hub.Farming = Farming

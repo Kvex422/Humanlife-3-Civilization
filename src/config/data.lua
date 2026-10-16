@@ -3,11 +3,11 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.15",
-		configSchema = 2,
-		builtAt = "2026-10-15",
+		script = "2.0.16",
+		builtAt = "2026-10-16",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.16  Gather perf: cached node positions/bounds, lighter discovery. Auto Farm only touches your own plots.",
 			"2.0.15  Crop farm: plant per-plot RemoteEvent, water via prompt, harvest via gathering remote.",
 			"2.0.14  Farming page: auto-harvest crops and animals, learned farm remote, anti-cheat WalkSpeed guard.",
 			"2.0.13  Fix accent recolour recursion, smoothness clamp, cham slot leak, stale aim toggle and pin state.",

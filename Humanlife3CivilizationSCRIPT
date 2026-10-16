@@ -1,5 +1,5 @@
 --!strict
--- TroyHub 2.0.15 bundled from src/. Edit modules and re-run tools/bundle.ps1.
+-- TroyHub 2.0.16 bundled from src/. Edit modules and re-run tools/bundle.ps1.
 local function __troyDefPack()
     local pack = {}
     local function def(name, factory)
@@ -297,11 +297,11 @@ end
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.15",
-		configSchema = 2,
-		builtAt = "2026-10-15",
+		script = "2.0.16",
+		builtAt = "2026-10-16",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.16  Gather perf: cached node positions/bounds, lighter discovery. Auto Farm only touches your own plots.",
 			"2.0.15  Crop farm: plant per-plot RemoteEvent, water via prompt, harvest via gathering remote.",
 			"2.0.14  Farming page: auto-harvest crops and animals, learned farm remote, anti-cheat WalkSpeed guard.",
 			"2.0.13  Fix accent recolour recursion, smoothness clamp, cham slot leak, stale aim toggle and pin state.",
@@ -649,6 +649,8 @@ return function(Hub: any)
 		FarmPlant = true,
 		FarmWater = true,
 		FarmHarvest = true,
+		FarmOwnerOnly = true,
+		FarmOwner = "",
 		FarmCycleDelay = 2.5,
 		FarmToCollect = defaultFarmSelection(),
 		AntiCheatGuard = true,
@@ -786,6 +788,8 @@ return function(Hub: any)
 		FarmPlant = true,
 		FarmWater = true,
 		FarmHarvest = true,
+		FarmOwnerOnly = true,
+		FarmOwner = "",
 		FarmCycleDelay = 2.5,
 		FarmToCollect = defaultFarmSelection(),
 		AntiCheatGuard = true,
@@ -3135,23 +3139,66 @@ return function(Hub: any)
 	-- ============================================================
 	local Farming = {}
 
-	local BUILDINGS = "Buildings"
-	local SLOT_COUNT = 6
+	-- Keys checked on the plot model, both as attributes and as child instances.
+	-- Owner data in this game is not documented, so match anything plausible.
+	local OWNER_KEYS = {
+		"Owner", "owner", "OwnerName", "OwnerId", "OwnerUserId",
+		"Player", "PlayerName", "UserId", "User", "Username",
+		"Farmer", "FarmOwner", "OwnerPlayer", "PlotOwner",
+	}
+
+	local farmCache: { list: { Model }, at: number } = { list = {}, at = 0 }
+	local ownerCache: { [Instance]: { cands: { any }, at: number } } = {}
 
 	local function isFarmModel(inst: Instance): boolean
 		return inst:IsA("Model") and string.sub(inst.Name, 1, 4) == "Farm"
 	end
 
-	-- Every plot model under workspace.Buildings whose name starts with "Farm".
+	-- Every plot model named "Farm*". Cached briefly: the farm loop asks for this
+	-- several times a second and the plot set rarely changes.
 	function Farming.farms(): { Model }
+		local now = os.clock()
+		if now - farmCache.at < 1 and #farmCache.list > 0 then
+			local live = true
+			for _, m in farmCache.list do
+				if not m.Parent then
+					live = false
+					break
+				end
+			end
+			if live then return farmCache.list end
+		end
+		farmCache.at = now
 		local out: { Model } = {}
-		local buildings = workspace:FindFirstChild(BUILDINGS)
-		if not buildings then return out end
-		for _, child in buildings:GetChildren() do
-			if isFarmModel(child) then
-				table.insert(out, child :: Model)
+		local seen: { [Instance]: boolean } = {}
+		local function add(inst: Instance)
+			if isFarmModel(inst) and not seen[inst] then
+				seen[inst] = true
+				table.insert(out, inst :: Model)
 			end
 		end
+		-- Preferred home, then fallbacks, then a shallow workspace sweep so a
+		-- renamed container does not hide every plot.
+		for _, name in { "Buildings", "Farms", "Plots", "FarmPlots" } do
+			local container = workspace:FindFirstChild(name)
+			if container then
+				for _, child in container:GetChildren() do
+					add(child)
+				end
+			end
+		end
+		if #out == 0 then
+			for _, child in workspace:GetChildren() do
+				if isFarmModel(child) then
+					add(child)
+				elseif child:IsA("Folder") or child:IsA("Model") then
+					for _, sub in child:GetChildren() do
+						add(sub)
+					end
+				end
+			end
+		end
+		farmCache.list = out
 		return out
 	end
 
@@ -3161,7 +3208,81 @@ return function(Hub: any)
 		if r and r:IsA("RemoteEvent") then
 			return r
 		end
+		local any = farm:FindFirstChildOfClass("RemoteEvent")
+		if any then return any end
 		return nil
+	end
+
+	-- Every plausible owner value on a plot (attributes first, then children).
+	-- Cached briefly so the per-pass filter does no repeated FindFirstChild work.
+	function Farming.ownerCandidates(farm: Model): { any }
+		local now = os.clock()
+		local hit = ownerCache[farm]
+		if hit and now - hit.at < 2 then return hit.cands end
+		local out: { any } = {}
+		for _, key in OWNER_KEYS do
+			local a = farm:GetAttribute(key)
+			if a ~= nil then
+				table.insert(out, a)
+			end
+		end
+		for _, child in farm:GetChildren() do
+			if child:IsA("ValueBase") then
+				local cname = string.lower(child.Name)
+				if string.find(cname, "owner", 1, true)
+					or string.find(cname, "player", 1, true)
+					or string.find(cname, "user", 1, true)
+					or string.find(cname, "farmer", 1, true) then
+					table.insert(out, (child :: any).Value)
+				end
+			end
+		end
+		local entry = { cands = out, at = os.clock() }
+		ownerCache[farm] = entry
+		return entry.cands
+	end
+
+	function Farming.hasOwnerInfo(farm: Model): boolean
+		return #Farming.ownerCandidates(farm) > 0
+	end
+
+	local function identityMatches(candidate: any, name: string, display: string, uid: number): boolean
+		if candidate == nil then return false end
+		local kind = type(candidate)
+		if kind == "number" then
+			return candidate == uid
+		end
+		if kind == "string" then
+			local c = string.lower(candidate)
+			return c == string.lower(name) or c == string.lower(display) or c == tostring(uid)
+		end
+		if typeof(candidate) == "Instance" then
+			local inst = candidate :: any
+			if inst:IsA("Player") then
+				return inst.UserId == uid
+			end
+			if inst:IsA("ValueBase") then
+				return identityMatches(inst.Value, name, display, uid)
+			end
+			return inst.Name == name
+		end
+		return false
+	end
+
+	-- True only when a plot carries ownership info naming this player. A plot
+	-- with no ownership info returns false, so "only my plots" never grabs a
+	-- stranger's farm just because the owner field was missing.
+	function Farming.ownedBy(farm: Model, player: any): boolean
+		if not player then return false end
+		local name = player.Name
+		local display = player.DisplayName or name
+		local uid = player.UserId
+		for _, c in Farming.ownerCandidates(farm) do
+			if identityMatches(c, name, display, uid) then
+				return true
+			end
+		end
+		return false
 	end
 
 	-- Grown/harvestable crops: descendants named after a catalog crop.
@@ -3192,7 +3313,7 @@ return function(Hub: any)
 	end
 
 	function Farming.slotCount(): number
-		return SLOT_COUNT
+		return 6
 	end
 
 	-- Totals for the UI: farms found, ready crops, water prompts.
@@ -3204,6 +3325,12 @@ return function(Hub: any)
 			water += #Farming.waterPrompts(farm)
 		end
 		return { farms = farms, crops = crops, water = water }
+	end
+
+	function Farming.resetCache()
+		farmCache.at = 0
+		table.clear(farmCache.list)
+		table.clear(ownerCache)
 	end
 
 	Hub.Farming = Farming
@@ -4407,6 +4534,7 @@ local farmStore = {
     lastSnap = 0,
     snap = {} :: { Instance },
     lastDiscover = 0,
+    lastSnapIngest = 0,
     lastCompact = 0,
 }
 
@@ -4448,24 +4576,35 @@ function Grid.remove(rec: any)
     rec.cell = nil
 end
 
+-- How long a measured position is trusted before it is measured again. The
+-- world is static, so re-running GetBoundingBox on every node every sweep was
+-- the main cost behind the gather stutter. Cached positions last this long.
+local RESCAN_TTL = 4
+
 function ResourceScanner.consider(obj: Instance)
     local inst, kind = ResourceScanner.resolve(obj)
     if not inst or not kind then return end
-    local pos = scanPos(inst)
-    if not pos then return end
+    local now = os.clock()
     local rec = farmStore.byInst[inst]
     if rec then
-        rec.pos = pos
         rec.kind = kind
         rec.dead = nil
-        -- Nodes rarely move, so only re-bucket when they actually cross a cell.
+        -- Known node: reuse the cached position until it goes stale, so a full
+        -- map sweep costs almost no bounding-box work.
+        if now - rec.at < RESCAN_TTL then return end
+        rec.at = now
+        local pos = scanPos(inst)
+        if not pos then return end
+        rec.pos = pos
         if rec.cell ~= Grid.cellOf(pos) then
             Grid.remove(rec)
             Grid.insert(rec)
         end
         return
     end
-    rec = { inst = inst, kind = kind, pos = pos }
+    local pos = scanPos(inst)
+    if not pos then return end
+    rec = { inst = inst, kind = kind, pos = pos, at = now }
     farmStore.byInst[inst] = rec
     table.insert(farmStore.items, rec)
     Grid.insert(rec)
@@ -4562,7 +4701,7 @@ function ResourceScanner.ingest(pos: Vector3, radius: number)
     local params = OverlapParams.new()
     params.FilterType = Enum.RaycastFilterType.Include
     params.FilterDescendantsInstances = { folder }
-    params.MaxParts = 300
+    params.MaxParts = 200
     local ok, parts = pcall(function()
         return workspace:GetPartBoundsInRadius(pos, radius, params)
     end)
@@ -4606,12 +4745,19 @@ end
 function ResourceScanner.discover()
     if Flags.Unloading then return end
     local now = os.clock()
-    if now - farmStore.lastDiscover < 0.2 then return end
+    if now - farmStore.lastDiscover < 0.4 then return end
     farmStore.lastDiscover = now
-    ResourceScanner.pulse(220)
-    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-    if root and root:IsA("BasePart") then
-        ResourceScanner.ingest(root.Position, 420)
+    -- Smaller sweep. Position caching means most of these are cheap cache hits.
+    ResourceScanner.pulse(120)
+    -- Broadphase pickup for nodes that streamed in near the player. A 420-stud
+    -- sphere every 0.2s was a lot of physics work for little gain; 300 studs at
+    -- most every 0.6s catches fresh nodes just as well.
+    if now - farmStore.lastSnapIngest > 0.6 then
+        farmStore.lastSnapIngest = now
+        local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+        if root and root:IsA("BasePart") then
+            ResourceScanner.ingest(root.Position, 300)
+        end
     end
     if now - farmStore.lastCompact > 4 then
         farmStore.lastCompact = now
@@ -4719,7 +4865,7 @@ function ResourceScanner.watch(callback)
     end
 end
 
-    Scheduler.add("discover", "logic", 0.2, function()
+    Scheduler.add("discover", "logic", 0.4, function()
         if Flags.Unloading then return end
         if State.ResourceESP or State.AutoGather or State.TeleportGather
             or State.GatherAround or State.LegitMode then
@@ -5121,7 +5267,7 @@ Pages["Farming"] = function()
     end
 
     sectionTitle("Auto Farm", y); y += 34
-    local c1 = card(y, 12 + 7 * 38 + 12); y += 12 + 7 * 38 + 22
+    local c1 = card(y, 12 + 9 * 38 + 12); y += 12 + 9 * 38 + 22
     local _, syncFarm = toggleRow(c1, "Auto Farm", 12, State.AutoFarm, function(v)
         setFeature("AutoFarm", v, true)
     end)
@@ -5129,19 +5275,27 @@ Pages["Farming"] = function()
     toggleRow(c1, "Plant empty slots", 50, State.FarmPlant, function(v) State.FarmPlant = v end)
     toggleRow(c1, "Water dry plots", 88, State.FarmWater, function(v) State.FarmWater = v end)
     toggleRow(c1, "Harvest  (gathering remote)", 126, State.FarmHarvest, function(v) State.FarmHarvest = v end)
-    toggleRow(c1, "Anti-cheat guard  (cap WalkSpeed below the kick threshold)", 164, State.AntiCheatGuard, function(v)
+    toggleRow(c1, "Only my plots  (verify owner)", 164, State.FarmOwnerOnly, function(v)
+        State.FarmOwnerOnly = v
+        if Hub.Farming then Hub.Farming.resetCache() end
+    end)
+    local _, ownerBox = textboxRow(c1, "Owner name", 202, player.Name, function(txt)
+        State.FarmOwner = txt
+        if Hub.Farming then Hub.Farming.resetCache() end
+    end)
+    if type(State.FarmOwner) == "string" and #State.FarmOwner > 0 then ownerBox.Text = State.FarmOwner end
+    toggleRow(c1, "Anti-cheat guard  (cap WalkSpeed below the kick threshold)", 240, State.AntiCheatGuard, function(v)
         State.AntiCheatGuard = v
         local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
         if hum and hum:IsA("Humanoid") then applyWalkSettings(hum) end
     end)
-    sliderRow(c1, "Cycle Delay", 202, 0.5, 30, State.FarmCycleDelay, " s", function(v) State.FarmCycleDelay = v end)
-    actionButton(c1, "Run One Cycle Now", 240, function()
+    sliderRow(c1, "Cycle Delay", 278, 0.5, 30, State.FarmCycleDelay, " s", function(v) State.FarmCycleDelay = v end)
+    actionButton(c1, "Run One Cycle Now", 316, function()
         if Hub.FarmPassOnce then Hub.FarmPassOnce() end
     end)
 
     sectionTitle("Status", y); y += 34
-    local cS = card(y, 130); y += 140
-    local cS = card(y, 130); y += 140
+    local cS = card(y, 168); y += 178
     new("TextLabel", {
         Size = UDim2.new(1, -32, 0, 46), Position = UDim2.fromOffset(16, 8),
         BackgroundTransparency = 1, Font = Theme.Font,
@@ -5164,6 +5318,31 @@ Pages["Farming"] = function()
         TextYAlignment = Enum.TextYAlignment.Top, Parent = cS,
     })
     State._statusLabel = statusLabel
+    local plotsLabel = new("TextLabel", {
+        Size = UDim2.new(1, -32, 0, 40), Position = UDim2.fromOffset(16, 118),
+        BackgroundTransparency = 1, Font = Theme.Code,
+        Text = "checking plots...", TextColor3 = Theme.TextDim,
+        TextSize = 11, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Parent = cS,
+    })
+    task.spawn(function()
+        local f = FarmScan
+        if not f then return end
+        f.resetCache()
+        local farms = f.farms()
+        local mine, withOwner = 0, 0
+        for _, farm in farms do
+            if f.hasOwnerInfo(farm) then withOwner += 1 end
+            if f.ownedBy(farm, player) then mine += 1 end
+        end
+        if not plotsLabel.Parent then return end
+        local st = f.stats()
+        plotsLabel.Text = string.format(
+            "%d plots found · %d owned by you · %d carry an owner field\n%d ready crops · %d water prompts",
+            #farms, mine, withOwner, st.crops, st.water
+        )
+        if ownerBox and ownerBox.Parent then ownerBox.PlaceholderText = player.Name end
+    end)
 
     sectionTitle("Catalog", y); y += 34
     local list = FD.list
@@ -6739,6 +6918,15 @@ do
         return nil, nil
     end
 
+    -- Height measured once per node and cached on its scanner record, so the
+    -- resource ESP stops calling GetBoundingBox on every node every frame.
+    ResourceScanner.measureHeight = function(entry: any): number
+        if entry.height then return entry.height end
+        local _, h = boundsOf(entry.inst)
+        entry.height = h or 5
+        return entry.height
+    end
+
     local function paintHealthBar(d, hp01: number, x: number, y: number, h: number)
         local hp = math.clamp(hp01, 0, 1)
         d.healthBg.Size = UDim2.fromOffset(3, h)
@@ -7264,12 +7452,8 @@ do
                 local rough = entry.pos
                 local rdx, rdy, rdz = rough.X - myPos.X, rough.Y - myPos.Y, rough.Z - myPos.Z
                 if rdx * rdx + rdy * rdy + rdz * rdz > maxD2 * 1.6 then return end
-                local pos = scanPos(obj)
-                if pos then
-                    ResourceScanner.reposition(entry, pos)
-                else
-                    pos = entry.pos
-                end
+                -- Cached position from the scanner; no per-frame bounding-box call.
+                local pos = entry.pos
                 local dx, dy, dz = pos.X - myPos.X, pos.Y - myPos.Y, pos.Z - myPos.Z
                 local d2 = dx * dx + dy * dy + dz * dz
                 if d2 > maxD2 then return end
@@ -7282,7 +7466,7 @@ do
                         onView = sp.X > -80 and sp.Y > -80 and sp.X < view.X + 80 and sp.Y < view.Y + 80
                     end
                 end
-                local _p, height = boundsOf(obj)
+                local height = ResourceScanner.measureHeight(entry)
                 table.insert(candidates, {
                     inst = obj, kind = kind, pos = pos,
                     dist = dist, height = height or 5, onView = onView,
@@ -9041,7 +9225,7 @@ local function farmPass()
     Farm.dest = nil
 end
 
-Scheduler.add("farm", "logic", 0.08, function()
+Scheduler.add("farm", "logic", 0.1, function()
     if Flags.Unloading or not ScreenGui.Parent then return end
     if farmJob.busy then return end
     farmJob.busy = true
@@ -9150,9 +9334,34 @@ local function farmCropsPass()
         return
     end
 
+    -- Restrict the pass to plots this player owns. An optional FarmOwner name
+    -- lets you match a different identity when the owner field is stored oddly.
+    local ownerTarget = player
+    local ownerLabel = player.Name
+    if type(State.FarmOwner) == "string" and #State.FarmOwner > 0 then
+        ownerTarget = { Name = State.FarmOwner, DisplayName = State.FarmOwner, UserId = -1 }
+        ownerLabel = State.FarmOwner
+    end
+
+    local targets: { any } = {}
+    for _, farm in farms do
+        if not State.FarmOwnerOnly or Hub.Farming.ownedBy(farm, ownerTarget) then
+            table.insert(targets, farm)
+        end
+    end
+
+    if #targets == 0 then
+        setFarmStatus(string.format(
+            "Auto Farm\nFound %d plots, none owned by %s%s",
+            #farms, ownerLabel,
+            (State.FarmOwnerOnly and #farms > 0) and "\n(no owner field? turn off 'Only my plots')" or ""
+        ), Theme.Warn)
+        return
+    end
+
     local cropName = farmSelectedCrop()
     local planted, harvested, watered = 0, 0, 0
-    for _, farm in farms do
+    for _, farm in targets do
         if Flags.Unloading or not State.AutoFarm then break end
         if State.FarmHarvest ~= false then
             harvested += harvestFarm(farm)
@@ -9166,8 +9375,8 @@ local function farmCropsPass()
     end
 
     setFarmStatus(string.format(
-        "Auto Farm\n%d plots · plant %d · water %d · harvest %d",
-        #farms, planted, watered, harvested
+        "Auto Farm\nmy %d/%d plots · plant %d · water %d · harvest %d",
+        #targets, #farms, planted, watered, harvested
     ), (planted + watered + harvested) > 0 and Theme.Success or Theme.Warn)
 end
 
