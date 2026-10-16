@@ -3706,7 +3706,7 @@ do
 
     local HP_KEYS = { "Health", "HP", "Hits", "Durability", "Lives", "Remaining" }
     local MAX_KEYS = { "MaxHealth", "MaxHP", "MaxHits", "MaxDurability", "Max" }
-    local resourceHP: { [Instance]: { hp: number, max: number, vol: number } } = {}
+        local resourceHP: { [Instance]: { hp: number, max: number, vol: number, at: number } } = {}
 
     local function parseHpPair(v: any): (number?, number?)
         if type(v) == "number" then
@@ -3797,7 +3797,13 @@ do
     end
 
     local function resourceHealth(obj: Instance): (number?, number?)
+        local now = os.clock()
         local rec = resourceHP[obj]
+        -- HP bars and the bounding-box measurement below are costly; a molecule
+        -- of staleness is invisible, so reuse the last reading for a moment.
+        if rec and now - (rec.at or 0) < 0.25 then
+            return rec.hp, rec.max
+        end
         local hp, maxHp
         local roots = { obj }
         if obj.Parent and obj.Parent ~= workspace then
@@ -3832,24 +3838,29 @@ do
             end
         end
         local vol = volumeOf(obj)
-        if not rec then
-            rec = { hp = hp or 1, max = maxHp or hp or 1, vol = math.max(vol, 0.01) }
-            resourceHP[obj] = rec
+        local entry: { hp: number, max: number, vol: number, at: number }
+        local existing = resourceHP[obj]
+        if existing then
+            entry = existing
+        else
+            entry = { hp = hp or 1, max = maxHp or hp or 1, vol = math.max(vol, 0.01), at = now }
+            resourceHP[obj] = entry
         end
-        if vol > rec.vol then
-            rec.vol = vol
+        entry.at = now
+        if vol > entry.vol then
+            entry.vol = vol
         end
         if hp then
-            rec.hp = hp
+            entry.hp = hp
             if maxHp then
-                rec.max = math.max(maxHp, hp)
-            elseif hp > rec.max then
-                rec.max = hp
+                entry.max = math.max(maxHp, hp)
+            elseif hp > entry.max then
+                entry.max = hp
             end
-            return rec.hp, rec.max
+            return entry.hp, entry.max
         end
-        if vol > 0 and rec.vol > 0 and vol < rec.vol * 0.98 then
-            return vol, rec.vol
+        if vol > 0 and entry.vol > 0 and vol < entry.vol * 0.98 then
+            return vol, entry.vol
         end
         return nil, nil
     end
@@ -4725,6 +4736,7 @@ local function listedNearby(maxDist: number, maxN: number?)
     local maxD2 = maxDist * maxDist
     local out = {}
     ResourceScanner.queryRadius(myPos, maxDist, function(e)
+        if #out >= (maxN or 1000000) then return end
         local inst = e.inst
         if not inst.Parent then
             ResourceScanner.drop(inst)
@@ -4784,9 +4796,10 @@ local function nearestListed()
             if d2 > ring2 then return end
             local dist = math.sqrt(d2)
             local score = nodeScore(e.kind, dist)
-            if score < bestScore then
+            if best == nil or score < bestScore then
                 bestScore = score
                 best = { inst = e.inst, kind = e.kind, dist = dist, pos = pos }
+                if bestScore <= -1000 then return end -- can't be much better
             end
         end)
         if best then return best end
@@ -4897,7 +4910,7 @@ local DWELL_MAX = 22
 local EMPTY_NEEDED = 5
 -- Neighbours hit per pass alongside the target. Unbounded fan-out was firing
 -- a couple hundred remotes a second in a dense grove.
-local MAX_FAN = 8
+    local MAX_FAN = 6
 local function fireFloor(): number
     return clampNum(State.FireFloor, 0.01, 0.5, 0.03)
 end
@@ -5367,7 +5380,7 @@ end
 
 local function mineCluster(radius: number, keepGoing: () -> boolean): number
     local fired = 0
-    for _, r in listedNearby(radius, MAX_FAN + 4) do
+    for _, r in listedNearby(radius, MAX_FAN + 2) do
         if not keepGoing() then break end
         if r.inst.Parent and fireGather(r.inst) then
             fired += 1
@@ -5744,7 +5757,7 @@ local function farmPass()
             string.format("Legit farm\n%s  ·  %.0f studs", nearest.inst.Name, nearest.dist),
             Theme.Success
         )
-        for _, r in listedNearby(reach, 12) do
+        for _, r in listedNearby(reach, math.min(8, MAX_FAN)) do
             if not keep() then break end
             LegitBot.click(r.pos)
             if math.random() < 0.15 then
@@ -5758,7 +5771,7 @@ local function farmPass()
     end
 
     if State.GatherAround then
-        local localNodes = listedNearby(aroundRange, 32)
+        local localNodes = listedNearby(aroundRange, math.min(16, MAX_FAN))
         if #localNodes > 0 then
             Farm.mining = true
             Farm.dest = nil
@@ -5826,7 +5839,7 @@ local function farmPass()
     Farm.dest = nil
 end
 
-Scheduler.add("farm", "logic", 0.1, function()
+    Scheduler.add("farm", "logic", 0.15, function()
     if Flags.Unloading or not ScreenGui.Parent then return end
     if farmJob.busy then return end
     farmJob.busy = true
@@ -5997,7 +6010,7 @@ Hub.FarmPassOnce = function()
     end)
 end
 
-Scheduler.add("autofarm", "logic", 0.08, function()
+    Scheduler.add("autofarm", "logic", 0.12, function()
     if Flags.Unloading or not ScreenGui.Parent then return end
     if not State.AutoFarm then return end
     -- The gather modes own movement while they run; running both makes the
