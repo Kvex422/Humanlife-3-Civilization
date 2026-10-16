@@ -67,6 +67,16 @@ end)
 
     local applyWalkSettings = Hub.applyWalkSettings
     if not applyWalkSettings then
+        -- Defensive fallback only; movement.lua normally provides this. Keep the
+        -- anti-cheat WalkSpeed ceiling so even the fallback cannot trip the kick.
+        local function fallbackWalkCap(): number
+            if State.AntiCheatGuard == false then return math.huge end
+            local c = Hub.Constants
+            if c and c.AntiCheat and type(c.AntiCheat.WalkSpeedMax) == "number" then
+                return c.AntiCheat.WalkSpeedMax
+            end
+            return 25
+        end
         applyWalkSettings = function(hum: Humanoid)
             hum.UseJumpPower = true
             hum.JumpPower = clampNum(State.JumpPower, 0, 500, 50)
@@ -80,7 +90,7 @@ end)
             elseif method == "Boost" then
                 hum.WalkSpeed = 16
             else
-                hum.WalkSpeed = clampNum(State.WalkSpeed, 0, 500, 40)
+                hum.WalkSpeed = math.min(clampNum(State.WalkSpeed, 0, 500, 40), fallbackWalkCap())
             end
         end
         Hub.applyWalkSettings = applyWalkSettings
@@ -164,7 +174,7 @@ new("TextLabel", {
 new("TextLabel", {
     Size = UDim2.fromOffset(400, 16), Position = UDim2.fromOffset(58, 30),
     BackgroundTransparency = 1, Font = Theme.Font,
-    Text = "Humanlife 3: Civilization   ·   2.0.6",
+    Text = "Humanlife 3: Civilization   ·   " .. (Hub.Version and Hub.Version.script or "?"),
     TextColor3 = Theme.TextFaint, TextSize = 11,
     TextXAlignment = Enum.TextXAlignment.Left, Parent = Header,
 })
@@ -272,9 +282,13 @@ end)
 -- ============================================================
 local applyAccents
 do
+    -- theme.lua installs the real implementation on Hub before app.lua loads.
+    -- Capture it now: the footer later does Hub.applyAccents = applyAccents,
+    -- and calling through Hub from the wrapper would then be infinite recursion.
+    local themeApplyAccents = Hub.applyAccents
     applyAccents = function(accent: Color3, accent2: Color3)
-        if Hub.applyAccents then
-            Hub.applyAccents(accent, accent2)
+        if themeApplyAccents then
+            themeApplyAccents(accent, accent2)
         else
             Theme.Accent = accent
             Theme.Accent2 = accent2
@@ -1817,6 +1831,150 @@ Pages["Auto Gather"] = function()
     Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
 end
 
+-- === Page: Farming ===
+Pages["Farming"] = function()
+    clearContent()
+    local y = 0
+    local FD = Hub.FarmData
+    local FarmScan = Hub.Farming
+    if not FD then
+        local c = card(0, 70)
+        new("TextLabel", {
+            Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Font = Theme.Font,
+            Text = "Farm catalog unavailable (config/data.lua did not load).",
+            TextColor3 = Theme.TextFaint, TextSize = 12, TextWrapped = true, Parent = c,
+        })
+        Content.CanvasSize = UDim2.new(0, 0, 0, 90)
+        return
+    end
+
+    sectionTitle("Auto Farm", y); y += 34
+    local c1 = card(y, 12 + 7 * 38 + 12); y += 12 + 7 * 38 + 22
+    local _, syncFarm = toggleRow(c1, "Auto Farm", 12, State.AutoFarm, function(v)
+        setFeature("AutoFarm", v, true)
+    end)
+    toggleSync.AutoFarm = syncFarm
+    toggleRow(c1, "Plant empty slots", 50, State.FarmPlant, function(v) State.FarmPlant = v end)
+    toggleRow(c1, "Water dry plots", 88, State.FarmWater, function(v) State.FarmWater = v end)
+    toggleRow(c1, "Harvest  (gathering remote)", 126, State.FarmHarvest, function(v) State.FarmHarvest = v end)
+    toggleRow(c1, "Anti-cheat guard  (cap WalkSpeed below the kick threshold)", 164, State.AntiCheatGuard, function(v)
+        State.AntiCheatGuard = v
+        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+        if hum and hum:IsA("Humanoid") then applyWalkSettings(hum) end
+    end)
+    sliderRow(c1, "Cycle Delay", 202, 0.5, 30, State.FarmCycleDelay, " s", function(v) State.FarmCycleDelay = v end)
+    actionButton(c1, "Run One Cycle Now", 240, function()
+        if Hub.FarmPassOnce then Hub.FarmPassOnce() end
+    end)
+
+    sectionTitle("Status", y); y += 34
+    local cS = card(y, 130); y += 140
+    local cS = card(y, 130); y += 140
+    new("TextLabel", {
+        Size = UDim2.new(1, -32, 0, 46), Position = UDim2.fromOffset(16, 8),
+        BackgroundTransparency = 1, Font = Theme.Font,
+        Text = "Plots are read from workspace.Buildings.Farm####. Planting fires each plot's RemoteEvent(crop, farm, slot); watering fires its \"Water\" proximity prompt; harvesting fires the gathering remote on each crop instance.",
+        TextColor3 = Theme.TextFaint, TextSize = 11, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, Parent = cS,
+    })
+    local dot = new("Frame", {
+        Size = UDim2.fromOffset(10, 10), Position = UDim2.fromOffset(24, 78),
+        BackgroundColor3 = Theme.Danger, BorderSizePixel = 0, Parent = cS,
+    })
+    corner(5, dot)
+    State._statusDot = dot
+    local statusLabel = new("TextLabel", {
+        Size = UDim2.new(1, -60, 0, 44), Position = UDim2.fromOffset(44, 72),
+        BackgroundTransparency = 1, Font = Theme.Font,
+        Text = "Auto Farm idle", TextColor3 = Theme.TextDim,
+        TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, Parent = cS,
+    })
+    State._statusLabel = statusLabel
+
+    sectionTitle("Catalog", y); y += 34
+    local list = FD.list
+    local rowH = 54
+    local cC = card(y, 12 + #list * rowH + 12); y += 12 + #list * rowH + 22
+    for i, name in list do
+        local def = FD.def(name)
+        local rowY = 8 + (i - 1) * rowH
+        local row = new("Frame", {
+            Size = UDim2.new(1, -32, 0, rowH - 6), Position = UDim2.fromOffset(16, rowY),
+            BackgroundTransparency = 1, Parent = cC,
+        })
+        local tone = if def.Kind == "Animal" then Theme.Accent2 else Theme.Accent
+        local rowDot = new("Frame", {
+            Size = UDim2.fromOffset(8, 8), Position = UDim2.fromOffset(0, rowH / 2 - 11),
+            BackgroundColor3 = tone, BorderSizePixel = 0, Parent = row,
+        })
+        corner(4, rowDot)
+        gradient(Theme.Accent, Theme.Accent2, 0, rowDot)
+        new("TextLabel", {
+            Size = UDim2.new(1, -140, 0, 18), Position = UDim2.fromOffset(18, 2),
+            BackgroundTransparency = 1, Font = Theme.Font, Text = name,
+            TextColor3 = Theme.Text, TextSize = 13,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+        })
+        local info = if def.Kind == "Animal"
+            then string.format("%s · %d s · Lv %d · feed %s x%d", def.Kind, def.Time, def.Level, def.Cost.Name, def.Cost.Amount)
+            else string.format("%s · %d s · Lv %d", def.Kind, def.Time, def.Level)
+        new("TextLabel", {
+            Size = UDim2.new(1, -90, 0, 14), Position = UDim2.fromOffset(18, 22),
+            BackgroundTransparency = 1, Font = Theme.Font, Text = info,
+            TextColor3 = Theme.TextFaint, TextSize = 11,
+            TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+        })
+        if State.FarmToCollect[name] == nil then State.FarmToCollect[name] = true end
+        toggleRow(row, "", 8, State.FarmToCollect[name], function(v)
+            State.FarmToCollect[name] = v
+        end)
+    end
+
+    sectionTitle("Plots", y); y += 34
+    local cR = card(y, 108); y += 118
+    local countLabel = new("TextLabel", {
+        Size = UDim2.new(1, -32, 0, 40), Position = UDim2.fromOffset(16, 8),
+        BackgroundTransparency = 1, Font = Theme.Font,
+        Text = "Scanning plots…", TextColor3 = Theme.TextDim,
+        TextSize = 12, TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, Parent = cR,
+    })
+    local function refreshPlots()
+        if not FarmScan then
+            if countLabel.Parent then countLabel.Text = "Farm scanner unavailable" end
+            return
+        end
+        local s = FarmScan.stats()
+        if countLabel.Parent then
+            countLabel.Text = string.format("%d plots · %d ready crops · %d water prompts", s.farms, s.crops, s.water)
+        end
+    end
+    refreshPlots()
+    local rescanBtn = new("TextButton", {
+        Size = UDim2.fromOffset(150, 34), Position = UDim2.fromOffset(16, 54),
+        BackgroundColor3 = Theme.Accent, BorderSizePixel = 0,
+        Font = Theme.FontBold, Text = "Refresh Plots",
+        TextColor3 = Color3.new(1, 1, 1), TextSize = 13,
+        AutoButtonColor = false, Parent = cR,
+    })
+    corner(8, rescanBtn)
+    gradient(Theme.Accent, Theme.Accent2, 0, rescanBtn)
+    track(rescanBtn.MouseButton1Click:Connect(function()
+        refreshPlots()
+        Notifications.info("Farm plots", countLabel.Text)
+    end))
+
+    Content.CanvasSize = UDim2.new(0, 0, 0, y + 40)
+
+    Scheduler.add("page:farming", "logic", 1.0, function()
+        if Flags.Unloading or currentPage ~= "Farming" then return end
+        refreshPlots()
+    end)
+end
+
 -- === Page: Visuals ===
 Pages["Visuals"] = function()
     clearContent()
@@ -2416,7 +2574,7 @@ Pages["UI Settings"] = function()
         for _, child in resultHolder:GetChildren() do
             if child ~= hint then child:Destroy() end
         end
-        local q = string.lower(string.gsub(query, "^%s+", ""))
+        local q = string.lower((string.gsub(query, "^%s+", "")))
         if #q < 2 then
             hint.Text = if Search.ready
                 then string.format("Search across every page.")
@@ -2896,6 +3054,7 @@ sectionHeader("Overview", 10)
 addNav("Dashboard")
 addNav("Resources")
 addNav("Auto Gather")
+addNav("Farming")
 
 sectionHeader("Game", sidebarY + 4); sidebarY += 24
 addNav("Combat")
@@ -3375,7 +3534,14 @@ do
             return
         end
         local hl = d.cham
-        if not hl or not hl.Parent then
+        if hl and not hl.Parent then
+            -- Highlight was destroyed from under us (espFolder cleared, folder
+            -- reset). Drop it so the counter stays honest and a new one can be
+            -- created below instead of d.cham staying stale forever.
+            dropCham(d)
+            hl = d.cham
+        end
+        if not hl then
             if chamCount >= CHAM_CAP then
                 return
             end
@@ -4007,6 +4173,7 @@ do
 
     local aimHeld = false
     local aimToggled = false
+    local lastAimMode = State.AimKey
     track(UserInputService.InputBegan:Connect(function(input, gpe)
         if gpe then return end
         if inputMatches(input, State.AimKeyCode) then
@@ -4017,9 +4184,19 @@ do
     track(UserInputService.InputEnded:Connect(function(input)
         if inputMatches(input, State.AimKeyCode) then aimHeld = false end
     end))
+    track(player.CharacterAdded:Connect(function()
+        aimHeld = false
+        aimToggled = false
+    end))
 
     local function aimEnabled(): boolean
         if not State.AimboT then return false end
+        -- Switching aim-key mode must not carry a stale toggle (or hold) on.
+        if State.AimKey ~= lastAimMode then
+            aimHeld = false
+            aimToggled = false
+            lastAimMode = State.AimKey
+        end
         if State.AimKey == "Hold" then return aimHeld end
         if State.AimKey == "Toggle" then return aimToggled end
         return true
@@ -4301,6 +4478,14 @@ Scheduler.add("unlockguard", "logic", 0.1, function()
     if Flags.Unloading then return end
     if movementLocked and not Farm.mining and Farm.dest == nil then
         unlockMovement()
+    end
+    if not movementLocked and not Farm.mining and Farm.dest == nil then
+        -- Farm is fully idle: clear the pin bookkeeping so the next session
+        -- starts with a fresh pin window instead of inheriting a leftover
+        -- rest/drift cooldown from the last one.
+        Pin.since = 0
+        Pin.restUntil = 0
+        Pin.drifted = 0
     end
     local hum = getHumanoid()
     if movementLocked and (not hum or hum.Health <= 0) then
@@ -5602,6 +5787,155 @@ Scheduler.add("farm", "logic", 0.08, function()
 end)
 
 -- ============================================================
+--  AUTO CROP FARM  (plant -> water -> harvest)
+--  Confirmed layout:
+--    workspace.Buildings.Farm####       (one Model per plot)
+--      RemoteEvent:FireServer(cropName, farmName, slot)  -- plant (slot 1..6)
+--      ProximityPrompt whose text contains "Water"       -- water
+--      crop instances named after the crop               -- harvest via Gathering
+--  Harvest rides the hub's existing Gathering remote (learned payload + hit gap);
+--  plant/water are fired straight at the plot remote / prompt.
+-- ============================================================
+local function farmSelectedCrop(): string
+    local fd = Hub.FarmData
+    if fd and type(fd.list) == "table" then
+        for _, rec in fd.list do
+            local isAnimal = fd.isAnimal and fd.isAnimal(rec)
+            if not isAnimal then
+                local sel = State.FarmToCollect
+                if sel == nil or sel[rec.name] ~= false then
+                    return rec.name
+                end
+            end
+        end
+    end
+    return "Carrot"
+end
+
+local function plantFarm(farm: Model, cropName: string): number
+    local remote = Hub.Farming and Hub.Farming.farmRemote(farm)
+    if not remote then return 0 end
+    local slots = Hub.Farming.slotCount and Hub.Farming.slotCount() or 6
+    local plant = Hub.Constants.Farming.PlantDelay or 0.35
+    local n = 0
+    for slot = 1, slots do
+        if Flags.Unloading or not State.AutoFarm then break end
+        if pcall(function()
+            remote:FireServer(cropName, farm.Name, slot)
+        end) then
+            n += 1
+        end
+        task.wait(plant)
+    end
+    return n
+end
+
+local function harvestFarm(farm: Model): number
+    if not Hub.Farming then return 0 end
+    if not GatherRemote or not GatherRemote.Parent then tryBindGather() end
+    local gap = Hub.Constants.Farming.HarvestDelay or 0.25
+    local n = 0
+    for _, crop in Hub.Farming.crops(farm) do
+        if Flags.Unloading or not State.AutoFarm then break end
+        if crop.Parent and fireGather(crop) then
+            n += 1
+        end
+        task.wait(gap)
+    end
+    return n
+end
+
+local function waterFarm(farm: Model): number
+    local firePrompt = executorFn("fireproximityprompt")
+    if type(firePrompt) ~= "function" or not Hub.Farming then return 0 end
+    local gap = Hub.Constants.Farming.WaterDelay or 0.4
+    local n = 0
+    for _, prompt in Hub.Farming.waterPrompts(farm) do
+        if Flags.Unloading or not State.AutoFarm then break end
+        if prompt.Parent then
+            if pcall(firePrompt, prompt) then
+                n += 1
+            end
+            task.wait(gap)
+        end
+    end
+    return n
+end
+
+local FarmCrops = { busy = false, lastCycle = 0 }
+
+local function farmCropsPass()
+    if not Hub.Farming then return end
+    local hum = getHumanoid()
+    if not hum or hum.Health <= 0 then return end
+    local cycle = clampNum(State.FarmCycleDelay, 0.5, 30, 2.5)
+    if os.clock() - FarmCrops.lastCycle < cycle then return end
+    FarmCrops.lastCycle = os.clock()
+
+    local farms = Hub.Farming.farms()
+    if #farms == 0 then
+        setFarmStatus("Auto Farm\nNo Farm plots under workspace.Buildings", Theme.Warn)
+        return
+    end
+
+    local cropName = farmSelectedCrop()
+    local planted, harvested, watered = 0, 0, 0
+    for _, farm in farms do
+        if Flags.Unloading or not State.AutoFarm then break end
+        if State.FarmHarvest ~= false then
+            harvested += harvestFarm(farm)
+        end
+        if State.FarmPlant ~= false then
+            planted += plantFarm(farm, cropName)
+        end
+        if State.FarmWater ~= false then
+            watered += waterFarm(farm)
+        end
+    end
+
+    setFarmStatus(string.format(
+        "Auto Farm\n%d plots · plant %d · water %d · harvest %d",
+        #farms, planted, watered, harvested
+    ), (planted + watered + harvested) > 0 and Theme.Success or Theme.Warn)
+end
+
+Hub.FarmPassOnce = function()
+    if FarmCrops.busy then return end
+    FarmCrops.busy = true
+    task.spawn(function()
+        FarmCrops.lastCycle = 0
+        local ok, err = pcall(farmCropsPass)
+        FarmCrops.busy = false
+        if not ok then
+            log("Farm pass error: " .. tostring(err))
+            cancelMoveTween()
+            unlockMovement()
+            Farm.dest = nil
+        end
+    end)
+end
+
+Scheduler.add("autofarm", "logic", 0.08, function()
+    if Flags.Unloading or not ScreenGui.Parent then return end
+    if not State.AutoFarm then return end
+    -- The gather modes own movement while they run; running both makes the
+    -- character fight itself between two teleport targets.
+    if State.AutoGather or State.TeleportGather or State.GatherAround then return end
+    if FarmCrops.busy then return end
+    FarmCrops.busy = true
+    task.spawn(function()
+        local ok, err = pcall(farmCropsPass)
+        FarmCrops.busy = false
+        if not ok then
+            log("Farm pass error: " .. tostring(err))
+            cancelMoveTween()
+            unlockMovement()
+            Farm.dest = nil
+        end
+    end)
+end)
+
+-- ============================================================
 --  STARTUP
 --  Runs last so every setter, page and loop it touches already exists.
 -- ============================================================
@@ -5629,7 +5963,7 @@ task.defer(function()
         if not Flags.Unloading then pcall(buildSettingsIndex) end
     end)
 
-    log(string.format("2.0.12 ready  ·  %d nodes indexed", ResourceScanner.count()))
+    log(string.format("%s ready  ·  %d nodes indexed", Hub.Version and Hub.Version.script or "?", ResourceScanner.count()))
 end)
     Hub.toggleSync = toggleSync
     Hub.setFeature = setFeature

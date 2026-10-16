@@ -3,11 +3,14 @@
 
 return function(Hub: any)
 	local Version = {
-		script = "2.0.12",
+		script = "2.0.15",
 		configSchema = 2,
-		builtAt = "2026-10-04",
+		builtAt = "2026-10-15",
 		compat = { "Humanlife 3: Civilization" },
 		changelog = {
+			"2.0.15  Crop farm: plant per-plot RemoteEvent, water via prompt, harvest via gathering remote.",
+			"2.0.14  Farming page: auto-harvest crops and animals, learned farm remote, anti-cheat WalkSpeed guard.",
+			"2.0.13  Fix accent recolour recursion, smoothness clamp, cham slot leak, stale aim toggle and pin state.",
 			"2.0.12  Harvest is always a bare node hit. Tool spoof is bonus damage only.",
 			"2.0.11  Catalog tool spoof without owning one. Single gather fire path, no duplicate payloads.",
 			"2.0.10  Shop tools: Flint/Bronze pick vs axe by node type.",
@@ -34,6 +37,81 @@ return function(Hub: any)
 	}
 
 	local SELL_STYLES = { "name_amount", "name_only", "amount_only", "all_name", "action_name" }
+
+	-- Farming catalog, mirrored from the game's ReplicatedStorage.Farming_Module.
+	-- Crops carry a grow Time (s), a temperature band, a level gate and the
+	-- classes/regions allowed to plant them. Animals carry a feed Cost instead
+	-- of a temperature band. Names must match the instances the game spawns in
+	-- the world, because the scanner matches on Name.
+	local CROPS: { [string]: any } = {
+		Wheat = { Name = "Wheat", Time = 4, MinTemp = 0, MaxTemp = 30, Level = 3, Class = { "Farmer", "Chef" }, Ethnicity = { "Europe", "Africa", "India", "Oceania", "Middle East", "China", "North America", "South America", "North America Euro" } },
+		Carrot = { Name = "Carrot", Time = 2, MinTemp = 0, MaxTemp = 30, Level = 0, Class = { "Farmer", "Chef" }, Ethnicity = { "Europe", "Africa", "Oceania", "North America Euro" } },
+		Cabbage = { Name = "Cabbage", Time = 6, MinTemp = 0, MaxTemp = 30, Level = 5, Class = { "Farmer", "Chef" }, Ethnicity = { "Europe", "North America Euro" } },
+		Berry = { Name = "Berry", Time = 2, MinTemp = 0, MaxTemp = 32, Level = 0, Class = { "Farmer", "Chef" }, Ethnicity = { "North America", "North America Euro" } },
+		Corn = { Name = "Corn", Time = 4, MinTemp = 0, MaxTemp = 32, Level = 3, Class = { "Farmer", "Chef" }, Ethnicity = { "North America", "South America", "North America Euro" } },
+		Pumpkin = { Name = "Pumpkin", Time = 8, MinTemp = 0, MaxTemp = 32, Level = 5, Class = { "Farmer", "Chef" }, Ethnicity = { "North America", "North America Euro" } },
+		Tomato = { Name = "Tomato", Time = 2, MinTemp = 0, MaxTemp = 32, Level = 0, Class = { "Farmer", "Chef" }, Ethnicity = { "South America" } },
+		Potato = { Name = "Potato", Time = 6, MinTemp = 0, MaxTemp = 32, Level = 5, Class = { "Farmer", "Chef" }, Ethnicity = { "South America", "Africa" } },
+		Coffee = { Name = "Coffee", Time = 2, MinTemp = 0, MaxTemp = 32, Level = 0, Class = { "Farmer", "Chef", "Doctor" }, Ethnicity = { "Africa" } },
+		Watermelon = { Name = "Watermelon", Time = 8, MinTemp = 0, MaxTemp = 32, Level = 5, Class = { "Farmer", "Chef" }, Ethnicity = { "Africa" } },
+		["Soy Beans"] = { Name = "Soy Beans", Time = 2, MinTemp = 0, MaxTemp = 32, Level = 0, Class = { "Farmer", "Chef" }, Ethnicity = { "China" } },
+		Rice = { Name = "Rice", Time = 4, MinTemp = 0, MaxTemp = 32, Level = 3, Class = { "Farmer", "Chef" }, Ethnicity = { "China", "Oceania" } },
+		["Bok Choy"] = { Name = "Bok Choy", Time = 6, MinTemp = 0, MaxTemp = 32, Level = 5, Class = { "Farmer", "Chef" }, Ethnicity = { "China" } },
+		Beet = { Name = "Beet", Time = 2, MinTemp = 0, MaxTemp = 32, Level = 0, Class = { "Farmer", "Chef" }, Ethnicity = { "Middle East" } },
+		Onion = { Name = "Onion", Time = 4, MinTemp = 0, MaxTemp = 32, Level = 5, Class = { "Farmer", "Chef" }, Ethnicity = { "Middle East" } },
+		Cucumber = { Name = "Cucumber", Time = 2, MinTemp = 0, MaxTemp = 32, Level = 0, Class = { "Farmer", "Chef" }, Ethnicity = { "India" } },
+		Eggplant = { Name = "Eggplant", Time = 4, MinTemp = 0, MaxTemp = 32, Level = 5, Class = { "Farmer" }, Ethnicity = { "India" } },
+		["Tea Leaf"] = { Name = "Tea Leaf", Time = 4, MinTemp = 0, MaxTemp = 32, Level = 15, Class = { "Farmer", "Doctor" }, Ethnicity = { "India" } },
+		Banana = { Name = "Banana", Time = 8, MinTemp = 0, MaxTemp = 32, Level = 6, Class = { "Farmer" }, Ethnicity = { "Oceania" } },
+		["Heal Root"] = { Name = "Heal Root", Time = 5, MinTemp = 0, MaxTemp = 30, Level = 6, Class = { "Farmer", "Doctor" }, Ethnicity = { "Europe", "Africa", "China", "North America", "South America", "India", "Oceania", "Middle East", "North America Euro" } },
+		Cotton = { Name = "Cotton", Time = 6, MinTemp = 0, MaxTemp = 30, Level = 10, Class = { "Farmer", "Doctor" }, Ethnicity = { "Europe", "Africa", "China", "North America", "South America", "India", "Oceania", "Middle East", "North America Euro" } },
+		Sage = { Name = "Sage", Time = 5, MinTemp = 0, MaxTemp = 32, Level = 15, Class = { "Farmer", "Doctor" }, Ethnicity = { "Europe", "Africa", "China", "North America", "South America", "India", "Oceania", "Middle East", "North America Euro" } },
+	}
+
+	local ANIMALS: { [string]: any } = {
+		Cow = { Name = "Cow", Time = 5, Level = 0, Class = { "Rancher" }, Cost = { Name = "Wheat", Amount = 2 }, Ethnicity = { "Europe", "Africa", "India", "Oceania", "Middle East", "China", "North America", "South America", "North America Euro" } },
+		Bull = { Name = "Bull", Time = 5, Level = 3, Class = { "Rancher" }, Cost = { Name = "Wheat", Amount = 2 }, Ethnicity = { "Europe", "Africa", "India", "Oceania", "Middle East", "China", "North America", "South America", "North America Euro" } },
+		["Dairy Cow"] = { Name = "Dairy Cow", Time = 5, Level = 5, Class = { "Rancher" }, Cost = { Name = "Wheat", Amount = 2 }, Ethnicity = { "Europe", "Africa", "India", "Oceania", "Middle East", "China", "North America", "South America", "North America Euro" } },
+	}
+
+	-- Ordered list for dropdowns and the scanner, plus a name -> kind lookup so a
+	-- single workspace Name is enough to classify an instance.
+	local FARM_LIST: { string } = {}
+	local FARM_NAMES: { [string]: string } = {}
+	for name, def in CROPS do
+		table.insert(FARM_LIST, name)
+		FARM_NAMES[name] = "Crop"
+		def.Kind = "Crop"
+	end
+	for name, def in ANIMALS do
+		table.insert(FARM_LIST, name)
+		FARM_NAMES[name] = "Animal"
+		def.Kind = "Animal"
+	end
+	table.sort(FARM_LIST, function(a: string, b: string)
+		local ka, kb = FARM_NAMES[a], FARM_NAMES[b]
+		if ka ~= kb then return ka < kb end
+		return a < b
+	end)
+
+	local FarmData = {
+		crops = CROPS,
+		animals = ANIMALS,
+		list = FARM_LIST,
+		names = FARM_NAMES,
+		isCrop = function(name: string): boolean
+			return FARM_NAMES[name] == "Crop"
+		end,
+		isAnimal = function(name: string): boolean
+			return FARM_NAMES[name] == "Animal"
+		end,
+		kindOf = function(name: string): string?
+			return FARM_NAMES[name]
+		end,
+		def = function(name: string): any?
+			return CROPS[name] or ANIMALS[name]
+		end,
+	}
 
 	local function fireSell(market, style: string, resourceName: string): boolean
 		if style == "name_amount" then
@@ -142,12 +220,14 @@ return function(Hub: any)
 	Hub.SELL_STYLES = SELL_STYLES
 	Hub.fireSell = fireSell
 	Hub.FarmStats = FarmStats
+	Hub.FarmData = FarmData
 	Hub.Data = {
 		RESOURCE_NAMES = RESOURCE_NAMES,
 		RESOURCE_LIST = RESOURCE_LIST,
 		SELL_STYLES = SELL_STYLES,
 		fireSell = fireSell,
 		FarmStats = FarmStats,
+		FarmData = FarmData,
 		Version = Version,
 	}
 	return Hub

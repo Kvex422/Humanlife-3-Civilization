@@ -16,6 +16,10 @@ return function(Hub: any)
 		},
 		Esp = { Grace = 0.8, Pool = 120 },
 		XRayRange = 300,
+		Farming = { PlantDelay = 0.35, WaterDelay = 0.4, HarvestDelay = 0.25, CycleDelay = 2.5 },
+		-- Humanlife 3 kicks if Humanoid.WalkSpeed stays above 26 while the
+		-- in-game Main_Menu is closed. 25 leaves a margin for the Changed delay.
+		AntiCheat = { WalkSpeedMax = 25 },
 	}
 	return Hub
 end

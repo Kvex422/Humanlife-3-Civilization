@@ -6,6 +6,19 @@ return function(Hub: any)
 	local Lighting = Hub.Services.Lighting
 	local clampNum = Hub.clampNum
 
+	-- Every crop and animal starts selected. Config load replaces this with the
+	-- saved subset.
+	local function defaultFarmSelection(): { [string]: boolean }
+		local t: { [string]: boolean } = {}
+		local fd = Hub.FarmData
+		if fd and type(fd.list) == "table" then
+			for _, name in fd.list do
+				t[name] = true
+			end
+		end
+		return t
+	end
+
 	local ConfigDefaults = {
 		AutoGather = false,
 		TeleportGather = false,
@@ -75,6 +88,13 @@ return function(Hub: any)
 		ClusterRadius = 90,
 		ClusterSeconds = 60,
 		AutoRejoin = false,
+		AutoFarm = false,
+		FarmPlant = true,
+		FarmWater = true,
+		FarmHarvest = true,
+		FarmCycleDelay = 2.5,
+		FarmToCollect = defaultFarmSelection(),
+		AntiCheatGuard = true,
 		UIScale = 1,
 		AutoUIScale = true,
 		TouchButton = true,
@@ -205,6 +225,14 @@ return function(Hub: any)
 
 		AutoRejoin = false,
 
+		AutoFarm = false,
+		FarmPlant = true,
+		FarmWater = true,
+		FarmHarvest = true,
+		FarmCycleDelay = 2.5,
+		FarmToCollect = defaultFarmSelection(),
+		AntiCheatGuard = true,
+
 		UIScale = 1,
 		AutoUIScale = true,
 		TouchButton = true,
@@ -256,8 +284,8 @@ return function(Hub: any)
 		FlySpeed = { min = 1, max = 500, fallback = 100 },
 		JumpPower = { min = 1, max = 500, fallback = 50 },
 		WalkSpeed = { min = 1, max = 500, fallback = 16 },
-		FOV = { min = 40, max = 120, fallback = 70 },
-		CamZoom = { min = 16, max = 400, fallback = 128 },
+		FOV = { min = 30, max = 120, fallback = 70 },
+		CamZoom = { min = 10, max = 500, fallback = 128 },
 		HitRange = { min = 4, max = 200, fallback = 45 },
 		LegitReach = { min = 2, max = 20, fallback = 8 },
 		LegitHitDelay = { min = 0.05, max = 3, fallback = 1.2 },
@@ -268,22 +296,23 @@ return function(Hub: any)
 		GatherSpeed = { min = 10, max = 400, fallback = 80 },
 		SoftTeleportSpeed = { min = 20, max = 800, fallback = 220 },
 		PinMax = { min = 0, max = 600, fallback = 6 },
-		MaxVelocity = { min = 20, max = 600, fallback = 160 },
+		MaxVelocity = { min = 16, max = 500, fallback = 160 },
 		HopDistance = { min = 20, max = 600, fallback = 180 },
 		LandSpread = { min = 0, max = 8, fallback = 1.4 },
 		SkipSeconds = { min = 1, max = 60, fallback = 8 },
 		ClusterRadius = { min = 10, max = 400, fallback = 90 },
 		ClusterSeconds = { min = 5, max = 300, fallback = 60 },
+		FarmCycleDelay = { min = 0.5, max = 30, fallback = 2.5 },
 		PriorityWeight = { min = 0, max = 200, fallback = 40 },
 		PlayerMaxDist = { min = 50, max = 2000, fallback = 700 },
-		ResourceMaxDist = { min = 50, max = 2000, fallback = 500 },
-		ResourceLimit = { min = 8, max = 200, fallback = 80 },
-		UIScale = { min = 0.6, max = 1.6, fallback = 1 },
+		ResourceMaxDist = { min = 25, max = 1000, fallback = 500 },
+		ResourceLimit = { min = 5, max = 200, fallback = 80 },
+		UIScale = { min = 0.5, max = 2, fallback = 1 },
 		UITransparency = { min = 0, max = 0.6, fallback = 0 },
-		AimMaxDist = { min = 20, max = 2000, fallback = 300 },
-		FOVRadius = { min = 20, max = 400, fallback = 120 },
-		Smoothness = { min = 0, max = 1, fallback = 0 },
-		AimPredictStrength = { min = 0, max = 40, fallback = 12 },
+		AimMaxDist = { min = 10, max = 2000, fallback = 300 },
+		FOVRadius = { min = 10, max = 2000, fallback = 120 },
+		Smoothness = { min = 0, max = 100, fallback = 0 },
+		AimPredictStrength = { min = 0, max = 60, fallback = 12 },
 		Gravity = { min = 0, max = 500, fallback = 196.2 },
 	}
 
@@ -312,6 +341,18 @@ return function(Hub: any)
 			for k in State.ResourcesToCollect do
 				if not names[k] then
 					State.ResourcesToCollect[k] = nil
+				end
+			end
+		end
+		if type(State.FarmToCollect) ~= "table" then
+			State.FarmToCollect = defaultFarmSelection()
+		else
+			local farmNames = Hub.FarmData and Hub.FarmData.names
+			if farmNames then
+				for k in State.FarmToCollect do
+					if not farmNames[k] then
+						State.FarmToCollect[k] = nil
+					end
 				end
 			end
 		end

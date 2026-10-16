@@ -20,6 +20,20 @@ return function(Hub: any)
 	local noclipCleanup: (() -> ())? = nil
 	local infJumpCleanup: (() -> ())? = nil
 
+	-- Humanlife 3 kicks any client whose Humanoid.WalkSpeed stays above 26 while
+	-- its Main_Menu GUI is closed. When the guard is on we keep the set speed
+	-- under that ceiling so enabling WalkSpeed cannot get the user kicked.
+	local function walkCap(): number
+		if State.AntiCheatGuard == false then
+			return math.huge
+		end
+		local c = Hub.Constants
+		if c and c.AntiCheat and type(c.AntiCheat.WalkSpeedMax) == "number" then
+			return c.AntiCheat.WalkSpeedMax
+		end
+		return 25
+	end
+
 	local function applyWalkSettings(hum: Humanoid)
 		hum.UseJumpPower = true
 		hum.JumpPower = clampNum(State.JumpPower, 0, 500, 50)
@@ -33,7 +47,7 @@ return function(Hub: any)
 		elseif method == "Boost" then
 			hum.WalkSpeed = 16
 		else
-			hum.WalkSpeed = clampNum(State.WalkSpeed, 0, 500, 40)
+			hum.WalkSpeed = math.min(clampNum(State.WalkSpeed, 0, 500, 40), walkCap())
 		end
 	end
 
@@ -326,8 +340,11 @@ return function(Hub: any)
 		local method = State.WalkSpeedMethod
 		local speed = math.max(State.WalkSpeed, 1)
 		if method == "Normal" then
-			if math.abs(hum.WalkSpeed - speed) > 0.05 then
-				hum.WalkSpeed = speed
+			-- Boost and Rigid never raise Humanoid.WalkSpeed above the vanilla 16,
+			-- so only Normal needs the anti-cheat ceiling.
+			local normal = math.min(speed, walkCap())
+			if math.abs(hum.WalkSpeed - normal) > 0.05 then
+				hum.WalkSpeed = normal
 			end
 			return
 		end
