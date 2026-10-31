@@ -488,7 +488,10 @@ return function(Hub: any)
 
 	function FarmStats.clock(): string
 		local total = math.floor(FarmStats.runSeconds)
-		return string.format("%02d:%02d:%02d",
+		if total < 3600 then
+			return string.format("%02d:%02d", math.floor(total / 60), total % 60)
+		end
+		return string.format("%d:%02d:%02d",
 			math.floor(total / 3600), math.floor(total % 3600 / 60), total % 60)
 	end
 
@@ -1454,7 +1457,8 @@ return function(Hub: any)
 	local Flags = Hub.Flags
 
 	local delays: { { cancelled: boolean } } = {}
-	local tweens: { Tween } = {}
+	-- Set instead of array: Completed handler removes in O(1) instead of O(n).
+	local tweens: { [Tween]: boolean } = {}
 
 	local Tasks = {}
 
@@ -1479,14 +1483,9 @@ return function(Hub: any)
 		end
 		local info = TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out)
 		local tw = TweenService:Create(inst, info, props)
-		table.insert(tweens, tw)
+		tweens[tw] = true
 		tw.Completed:Connect(function()
-			for i = #tweens, 1, -1 do
-				if tweens[i] == tw then
-					table.remove(tweens, i)
-					break
-				end
-			end
+			tweens[tw] = nil
 		end)
 		tw:Play()
 		return tw
@@ -1497,7 +1496,7 @@ return function(Hub: any)
 			token.cancelled = true
 		end
 		table.clear(delays)
-		for _, tw in tweens do
+		for tw in tweens do
 			pcall(function()
 				tw:Cancel()
 			end)
@@ -1536,18 +1535,13 @@ return function(Hub: any)
 
 	local Scheduler = {}
 	local phases: { [string]: { [string]: Job } } = { render = {}, logic = {} }
-	-- Cached execution order per phase. Rebuilt only when a job is added or
-	-- removed, so the per-frame path does no allocation or sorting at all.
-	local phaseOrder: { [string]: { string } } = { render = {}, logic = {} }
-	local orderDirty: { [string]: boolean } = { render = true, logic = true }
+	-- Sorted name arrays are rebuilt only when a job is added or removed.
+	-- Previously rebuilt on every Heartbeat + RenderStepped tick (~120/s).
+	local sortCache: { [string]: { string } } = { render = {}, logic = {} }
+	local dirty: { [string]: boolean } = { render = true, logic = true }
 	local runningName: string? = nil
 	local MAX_ERRORS = 12
 	local DEFAULT_BUDGET = 0.008
-
-	local function markOrderDirty()
-		orderDirty.render = true
-		orderDirty.logic = true
-	end
 
 	local function jobKey(group: string, name: string): string
 		if group == "" or group == "root" then
@@ -1556,33 +1550,33 @@ return function(Hub: any)
 		return group .. ":" .. name
 	end
 
-	local function namesFor(phaseName: string): { string }
-		local names = phaseOrder[phaseName]
-		if orderDirty[phaseName] then
-			local list = phases[phaseName]
-			table.clear(names)
-			for name in list do
-				table.insert(names, name)
-			end
-			table.sort(names, function(a, b)
-				local ja, jb = list[a], list[b]
-				if ja.priority == jb.priority then
-					return a < b
-				end
-				return ja.priority < jb.priority
-			end)
-			orderDirty[phaseName] = false
+	local function rebuildSorted(phaseName: string)
+		local list = phases[phaseName]
+		local names = {}
+		for name in list do
+			table.insert(names, name)
 		end
-		return names
+		table.sort(names, function(a, b)
+			local ja, jb = list[a], list[b]
+			if ja.priority == jb.priority then
+				return a < b
+			end
+			return ja.priority < jb.priority
+		end)
+		sortCache[phaseName] = names
+		dirty[phaseName] = false
 	end
 
 	local function runPhase(phaseName: string, dt: number)
 		if Flags.Unloading then
 			return
 		end
+		if dirty[phaseName] then
+			rebuildSorted(phaseName)
+		end
 		local now = os.clock()
 		local list = phases[phaseName]
-		for _, name in namesFor(phaseName) do
+		for _, name in sortCache[phaseName] do
 			local job = list[name]
 			if not job or job.disabled then
 				continue
@@ -1653,54 +1647,60 @@ return function(Hub: any)
 			runs = 0,
 			lastMs = 0,
 		}
-		markOrderDirty()
+		dirty[phaseName] = true
 	end
 
 	function Scheduler.remove(name: string)
-		phases.render[name] = nil
-		phases.logic[name] = nil
-		markOrderDirty()
+		if phases.render[name] then
+			phases.render[name] = nil
+			dirty.render = true
+		end
+		if phases.logic[name] then
+			phases.logic[name] = nil
+			dirty.logic = true
+		end
 	end
 
 	function Scheduler.removeGroup(group: string)
 		local prefix = group .. ":"
-		for _, list in phases do
+		for phaseName, list in phases do
 			for name in list do
 				if string.sub(name, 1, #prefix) == prefix then
 					list[name] = nil
+					dirty[phaseName] = true
 				end
 			end
 		end
-		markOrderDirty()
 	end
 
 	function Scheduler.removeByOwner(owner: string)
-		for _, list in phases do
+		for phaseName, list in phases do
 			for name, job in list do
 				if job.owner == owner then
 					list[name] = nil
+					dirty[phaseName] = true
 				end
 			end
 		end
-		markOrderDirty()
 	end
 
 	function Scheduler.removePages()
 		Scheduler.removeGroup("page")
-		for _, list in phases do
+		for phaseName, list in phases do
 			for name in list do
 				if string.sub(name, 1, 5) == "page:" then
 					list[name] = nil
+					dirty[phaseName] = true
 				end
 			end
 		end
-		markOrderDirty()
 	end
 
 	function Scheduler.clear()
 		table.clear(phases.render)
 		table.clear(phases.logic)
-		markOrderDirty()
+		dirty.render = true
+		dirty.logic = true
 	end
 
 	function Scheduler.snapshot(): { { name: string, phase: string, errors: number, lastMs: number, disabled: boolean } }
@@ -3131,30 +3131,6 @@ end
 
 return function(Hub: any)
 	local FM = Hub.FeatureManager
-	local clampNum = Hub.clampNum
-
-	local Selector = {}
-
-	-- Lower is better. Distance is penalized with a mild curve so clustered
-	-- high-value nodes still beat a lone tree underfoot when PriorityWeight
-	-- is high, without letting a gold node 800 studs away win every time.
-	function Selector.score(dist: number, kind: string, opts: any?): number
-		local State = Hub.State
-		local weight = clampNum(State.PriorityWeight, 0, 200, 40)
-		local prioMap = State.ResourcePriority
-		local prio = 1
-		if type(prioMap) == "table" then
-			prio = tonumber(prioMap[kind]) or 1
-		end
-		local curve = 1.12
-		if opts and type(opts.curve) == "number" then
-			curve = opts.curve
-		end
-		local penalty = dist ^ curve
-		return penalty - (prio * weight)
-	end
-
-	Hub.Selector = Selector
 
 	-- ============================================================
 	--  FARM DISCOVERY

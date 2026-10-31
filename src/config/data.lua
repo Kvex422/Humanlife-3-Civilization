@@ -194,7 +194,10 @@ return function(Hub: any)
 
 	function FarmStats.clock(): string
 		local total = math.floor(FarmStats.runSeconds)
-		return string.format("%02d:%02d:%02d",
+		if total < 3600 then
+			return string.format("%02d:%02d", math.floor(total / 60), total % 60)
+		end
+		return string.format("%d:%02d:%02d",
 			math.floor(total / 3600), math.floor(total % 3600 / 60), total % 60)
 	end
 

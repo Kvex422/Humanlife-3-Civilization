@@ -6,7 +6,8 @@ return function(Hub: any)
 	local Flags = Hub.Flags
 
 	local delays: { { cancelled: boolean } } = {}
-	local tweens: { Tween } = {}
+	-- Set instead of array: Completed handler removes in O(1) instead of O(n).
+	local tweens: { [Tween]: boolean } = {}
 
 	local Tasks = {}
 
@@ -31,14 +32,9 @@ return function(Hub: any)
 		end
 		local info = TweenInfo.new(time or 0.18, style or Enum.EasingStyle.Quad, dir or Enum.EasingDirection.Out)
 		local tw = TweenService:Create(inst, info, props)
-		table.insert(tweens, tw)
+		tweens[tw] = true
 		tw.Completed:Connect(function()
-			for i = #tweens, 1, -1 do
-				if tweens[i] == tw then
-					table.remove(tweens, i)
-					break
-				end
-			end
+			tweens[tw] = nil
 		end)
 		tw:Play()
 		return tw
@@ -49,7 +45,7 @@ return function(Hub: any)
 			token.cancelled = true
 		end
 		table.clear(delays)
-		for _, tw in tweens do
+		for tw in tweens do
 			pcall(function()
 				tw:Cancel()
 			end)

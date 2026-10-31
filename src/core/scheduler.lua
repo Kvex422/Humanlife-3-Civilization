@@ -24,18 +24,13 @@ return function(Hub: any)
 
 	local Scheduler = {}
 	local phases: { [string]: { [string]: Job } } = { render = {}, logic = {} }
-	-- Cached execution order per phase. Rebuilt only when a job is added or
-	-- removed, so the per-frame path does no allocation or sorting at all.
-	local phaseOrder: { [string]: { string } } = { render = {}, logic = {} }
-	local orderDirty: { [string]: boolean } = { render = true, logic = true }
+	-- Sorted name arrays are rebuilt only when a job is added or removed.
+	-- Previously rebuilt on every Heartbeat + RenderStepped tick (~120/s).
+	local sortCache: { [string]: { string } } = { render = {}, logic = {} }
+	local dirty: { [string]: boolean } = { render = true, logic = true }
 	local runningName: string? = nil
 	local MAX_ERRORS = 12
 	local DEFAULT_BUDGET = 0.008
-
-	local function markOrderDirty()
-		orderDirty.render = true
-		orderDirty.logic = true
-	end
 
 	local function jobKey(group: string, name: string): string
 		if group == "" or group == "root" then
@@ -44,33 +39,33 @@ return function(Hub: any)
 		return group .. ":" .. name
 	end
 
-	local function namesFor(phaseName: string): { string }
-		local names = phaseOrder[phaseName]
-		if orderDirty[phaseName] then
-			local list = phases[phaseName]
-			table.clear(names)
-			for name in list do
-				table.insert(names, name)
-			end
-			table.sort(names, function(a, b)
-				local ja, jb = list[a], list[b]
-				if ja.priority == jb.priority then
-					return a < b
-				end
-				return ja.priority < jb.priority
-			end)
-			orderDirty[phaseName] = false
+	local function rebuildSorted(phaseName: string)
+		local list = phases[phaseName]
+		local names = {}
+		for name in list do
+			table.insert(names, name)
 		end
-		return names
+		table.sort(names, function(a, b)
+			local ja, jb = list[a], list[b]
+			if ja.priority == jb.priority then
+				return a < b
+			end
+			return ja.priority < jb.priority
+		end)
+		sortCache[phaseName] = names
+		dirty[phaseName] = false
 	end
 
 	local function runPhase(phaseName: string, dt: number)
 		if Flags.Unloading then
 			return
 		end
+		if dirty[phaseName] then
+			rebuildSorted(phaseName)
+		end
 		local now = os.clock()
 		local list = phases[phaseName]
-		for _, name in namesFor(phaseName) do
+		for _, name in sortCache[phaseName] do
 			local job = list[name]
 			if not job or job.disabled then
 				continue
@@ -141,54 +136,60 @@ return function(Hub: any)
 			runs = 0,
 			lastMs = 0,
 		}
-		markOrderDirty()
+		dirty[phaseName] = true
 	end
 
 	function Scheduler.remove(name: string)
-		phases.render[name] = nil
-		phases.logic[name] = nil
-		markOrderDirty()
+		if phases.render[name] then
+			phases.render[name] = nil
+			dirty.render = true
+		end
+		if phases.logic[name] then
+			phases.logic[name] = nil
+			dirty.logic = true
+		end
 	end
 
 	function Scheduler.removeGroup(group: string)
 		local prefix = group .. ":"
-		for _, list in phases do
+		for phaseName, list in phases do
 			for name in list do
 				if string.sub(name, 1, #prefix) == prefix then
 					list[name] = nil
+					dirty[phaseName] = true
 				end
 			end
 		end
-		markOrderDirty()
 	end
 
 	function Scheduler.removeByOwner(owner: string)
-		for _, list in phases do
+		for phaseName, list in phases do
 			for name, job in list do
 				if job.owner == owner then
 					list[name] = nil
+					dirty[phaseName] = true
 				end
 			end
 		end
-		markOrderDirty()
 	end
 
 	function Scheduler.removePages()
 		Scheduler.removeGroup("page")
-		for _, list in phases do
+		for phaseName, list in phases do
 			for name in list do
 				if string.sub(name, 1, 5) == "page:" then
 					list[name] = nil
+					dirty[phaseName] = true
 				end
 			end
 		end
-		markOrderDirty()
 	end
 
 	function Scheduler.clear()
 		table.clear(phases.render)
 		table.clear(phases.logic)
-		markOrderDirty()
+		dirty.render = true
+		dirty.logic = true
 	end
 
 	function Scheduler.snapshot(): { { name: string, phase: string, errors: number, lastMs: number, disabled: boolean } }

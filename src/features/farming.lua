@@ -13,30 +13,6 @@
 
 return function(Hub: any)
 	local FM = Hub.FeatureManager
-	local clampNum = Hub.clampNum
-
-	local Selector = {}
-
-	-- Lower is better. Distance is penalized with a mild curve so clustered
-	-- high-value nodes still beat a lone tree underfoot when PriorityWeight
-	-- is high, without letting a gold node 800 studs away win every time.
-	function Selector.score(dist: number, kind: string, opts: any?): number
-		local State = Hub.State
-		local weight = clampNum(State.PriorityWeight, 0, 200, 40)
-		local prioMap = State.ResourcePriority
-		local prio = 1
-		if type(prioMap) == "table" then
-			prio = tonumber(prioMap[kind]) or 1
-		end
-		local curve = 1.12
-		if opts and type(opts.curve) == "number" then
-			curve = opts.curve
-		end
-		local penalty = dist ^ curve
-		return penalty - (prio * weight)
-	end
-
-	Hub.Selector = Selector
 
 	-- ============================================================
 	--  FARM DISCOVERY
